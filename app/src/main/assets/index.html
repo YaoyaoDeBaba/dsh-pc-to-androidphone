@@ -7,42 +7,73 @@
 <style>
   :root{--bg:#12121c;--card:#1c1c2b;--fg:#e8e8f0;--dim:#8a8aa0;--acc:#5b8cff;--ok:#3ecf8e;--err:#ff5c7a}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  [hidden]{display:none !important}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
   body{display:flex;flex-direction:column}
-  header{padding:14px 16px;font-weight:600;font-size:16px;border-bottom:1px solid #26263a;
-    display:flex;align-items:center;gap:8px}
-  header .fish{font-size:20px}
+  header{padding:12px 14px;font-weight:600;font-size:15px;border-bottom:1px solid #26263a;
+    display:flex;align-items:center;gap:8px;flex:0 0 auto}
+  header .fish{font-size:19px}
   #status{margin-left:auto;font-size:12px;color:var(--dim);font-weight:400}
-  main{flex:1;overflow:auto;padding:16px}
-  .card{background:var(--card);border:1px solid #2a2a40;border-radius:14px;padding:16px;margin-bottom:14px}
-  .card h2{margin:0 0 10px;font-size:15px}
-  .row{display:flex;gap:10px}
+  main{flex:1;overflow:auto;padding:12px}
+  .card{background:var(--card);border:1px solid #2a2a40;border-radius:12px;padding:12px;margin-bottom:12px}
+  .card h2{margin:0 0 10px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .card h2 button{margin-left:auto}
+  .row{display:flex;gap:8px}
   input{flex:1;background:#0e0e18;border:1px solid #33334a;color:var(--fg);
-    border-radius:10px;padding:12px;font-size:16px;letter-spacing:3px}
-  button{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:12px 18px;
-    font-size:15px;font-weight:600}
+    border-radius:9px;padding:11px;font-size:15px;min-width:0}
+  #pairCode{letter-spacing:4px;font-size:18px;text-align:center}
+  button{background:var(--acc);color:#fff;border:0;border-radius:9px;padding:11px 15px;
+    font-size:14px;font-weight:600;white-space:nowrap}
+  button.ghost{background:#26263a;color:#cfcfe0}
   button:disabled{opacity:.45}
-  .muted{color:var(--dim);font-size:13px;line-height:1.6;margin:10px 0 0}
-  .big{font-size:13px;color:var(--dim);text-align:center;padding:24px 0}
-  .ok{color:var(--ok)}
+  button.session{display:block;width:100%;text-align:left;background:#23233a;color:var(--fg);
+    margin-bottom:8px;padding:12px;font-size:14px}
+  button.session.active{background:#31427a}
+  .muted{color:var(--dim);font-size:12px;line-height:1.6;margin:8px 0 0}
+  #messages{max-height:44vh;overflow:auto;margin-bottom:10px}
+  .msg{padding:9px 11px;border-radius:10px;margin-bottom:8px;font-size:14px;line-height:1.5;
+    white-space:pre-wrap;word-break:break-word}
+  .msg.ai{background:#20202f;border:1px solid #2c2c42}
+  .msg.me{background:#2b3a66}
+  #log{max-height:26vh;overflow:auto;font-size:11px;line-height:1.45;color:#9a9ab0;
+    margin:0;white-space:pre-wrap;word-break:break-all}
 </style>
 </head>
 <body>
   <header><span class="fish">🐟</span><span>大肥鱼远控</span><span id="status">启动中…</span></header>
   <main>
-    <div class="card">
+    <section id="pairCard" class="card">
       <h2>配对</h2>
       <div class="row">
-        <input id="pairCode" inputmode="numeric" maxlength="6" placeholder="输入 6 位配对码" disabled>
-        <button id="connectBtn" disabled>连接</button>
+        <input id="pairCode" inputmode="numeric" maxlength="6" placeholder="6 位配对码">
+        <button id="connectBtn">连接</button>
       </div>
-      <p class="muted">配对码显示在电脑上 DSH 的状态栏小卡片里。</p>
-    </div>
-    <div class="card">
-      <h2>会话</h2>
-      <div class="big" id="sessionBox">客户端逻辑正在接入，先验证编译管道 ✅</div>
-    </div>
+      <p class="muted">配对码显示在电脑上 DSH 状态栏那颗小鱼卡片里。</p>
+      <div class="row" style="margin-top:10px">
+        <input id="relayUrl" placeholder="中继地址">
+        <button id="saveRelayBtn" class="ghost">保存</button>
+      </div>
+    </section>
+
+    <section id="listCard" class="card" hidden>
+      <h2>会话 <button id="refreshBtn" class="ghost">刷新</button></h2>
+      <div id="sessions"></div>
+    </section>
+
+    <section id="chatCard" class="card" hidden>
+      <h2 id="chatTitle">对话</h2>
+      <div id="messages"></div>
+      <div class="row">
+        <input id="msgInput" placeholder="说点什么…">
+        <button id="sendBtn">发</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>日志 <button id="clearLog" class="ghost">清空</button></h2>
+      <pre id="log"></pre>
+    </section>
   </main>
   <script src="app.js"></script>
 </body>
