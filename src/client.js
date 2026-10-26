@@ -366,19 +366,29 @@ function handleFrame(f) {
       if (!hostPubS || !wrappedS) { log('pair-grant 字段认不出'); break }
       try {
         const shared = nacl.box.before(b64d(hostPubS), S.keypair.secretKey)
+        // 官方方案（crypto/sas.ts）：包裹密钥 = SHA-512(shared ‖ "dsh-rc/psk-wrap")[0..32]
+        const wrapKey = sha512Bytes(concatBytes(shared, te.encode('dsh-rc/psk-wrap'))).subarray(0, 32)
+        // 6 位 SAS 比对码（给用户核对；不阻断流程）
+        const s = sha512Bytes(concatBytes(shared, te.encode('dsh-rc/sas'))).subarray(0, 4)
+        const v = ((s[0] << 24) | (s[1] << 16) | (s[2] << 8) | s[3]) >>> 0
+        log('[pair-grant] SAS=' + String(v % 1000000).padStart(6, '0'))
+
         const wrappedBytes = b64d(wrappedS)
         const candidates = []
-        // 方案 A：独立 nonce 字段 + box 密文
-        if (nonceS) {
+        const tryOpen = (key, ct) => {
           try {
-            const r = nacl.secretbox.open(wrappedBytes, b64d(nonceS), shared)
+            const r = nacl.secretbox.open(ct, b64d(nonceS), key)
             if (r) candidates.push(r)
           } catch (_) {}
         }
-        // 方案 B：wrapped 自身就是 nonce(24)‖box（同 seal 的记录格式）
+        // 方案 A（官方）：wrapKey + 独立 nonce
+        if (nonceS) tryOpen(wrapKey, wrappedBytes)
+        // 方案 B（兼容旧版）：直接拿 shared 当密钥
+        if (nonceS) tryOpen(shared, wrappedBytes)
+        // 方案 C：wrapped 自身就是 nonce(24)‖box（同 seal 的记录格式）
         if (wrappedBytes.length >= 40) {
           try {
-            const r = nacl.secretbox.open(wrappedBytes.subarray(24), wrappedBytes.subarray(0, 24), shared)
+            const r = nacl.secretbox.open(wrappedBytes.subarray(24), wrappedBytes.subarray(0, 24), wrapKey)
             if (r) candidates.push(r)
           } catch (_) {}
         }
