@@ -14,7 +14,7 @@ const PROTOCOL_VERSION = 1
 const KDF_NS = 'dsh-rc/v1'
 const NONCE_NS = 'dsh-rc/v1/nonce'
 const UNIT = 0x1f
-const DEFAULT_RELAY = 'wss://drc.provid.cc'
+const DEFAULT_RELAY = 'wss://drc.provid.cc/v05'
 
 /* ================= 二进制工具 ================= */
 const te = new TextEncoder()
@@ -356,17 +356,53 @@ function handleFrame(f) {
     }
 
     case 'pair-grant': {
-      log('[pair-grant keys]', Object.keys(f).join(','))
+      const keys = Object.keys(f).join(',')
+      const hostPubS = f.hostPub || f.hostPublicKey || f.pub || f.hostPk
+      const nonceS = f.nonce || f.iv || f.n
+      const wrappedS = f.wrappedPsk || f.psk || f.wrapped || f.ciphertext
+      const short = (s) => (typeof s === 'string' ? s.slice(0, 12) + '…(' + s.length + ')' : String(s))
+      log('[pair-grant] keys=' + keys)
+      log('[pair-grant] hostPub=' + short(hostPubS) + ' nonce=' + short(nonceS) + ' wrapped=' + short(wrappedS))
+      if (!hostPubS || !wrappedS) { log('pair-grant 字段认不出'); break }
       try {
-        const hostPub = f.hostPub || f.hostPublicKey || f.pub || f.hostPk
-        const nonce = f.nonce || f.iv || f.n
-        const wrapped = f.wrappedPsk || f.psk || f.wrapped || f.ciphertext
-        if (!hostPub || !nonce || !wrapped) { log('pair-grant 字段认不出'); break }
-        const shared = nacl.box.before(b64d(hostPub), S.keypair.secretKey)
-        const psk = nacl.secretbox.open(b64d(wrapped), b64d(nonce), shared)
-        if (!psk) { setStatus('密钥解开失败', '#ff5c7a'); log('psk 解密失败'); break }
+        const shared = nacl.box.before(b64d(hostPubS), S.keypair.secretKey)
+        const wrappedBytes = b64d(wrappedS)
+        const candidates = []
+        // 方案 A：独立 nonce 字段 + box 密文
+        if (nonceS) {
+          try {
+            const r = nacl.secretbox.open(wrappedBytes, b64d(nonceS), shared)
+            if (r) candidates.push(r)
+          } catch (_) {}
+        }
+        // 方案 B：wrapped 自身就是 nonce(24)‖box（同 seal 的记录格式）
+        if (wrappedBytes.length >= 40) {
+          try {
+            const r = nacl.secretbox.open(wrappedBytes.subarray(24), wrappedBytes.subarray(0, 24), shared)
+            if (r) candidates.push(r)
+          } catch (_) {}
+        }
+        log('[pair-grant] 解出候选 ' + candidates.length + ' 个')
+        if (!candidates.length) { setStatus('密钥解开失败', '#ff5c7a'); log('psk 解密失败'); break }
+        let psk = null
+        for (const raw of candidates) {
+          let bytes = raw
+          try {
+            const txt = td.decode(raw)
+            const t = txt.trim()
+            if (t.startsWith('{')) {
+              const obj = JSON.parse(t)
+              const cand = obj.psk || obj.key || obj.wrappedPsk
+              if (typeof cand === 'string') bytes = b64d(cand)
+            } else if (bytes.length !== 16 && /^[A-Za-z0-9+/]+={0,2}$/.test(t)) {
+              bytes = b64d(t)
+            }
+          } catch (_) {}
+          if (bytes.length === 16) { psk = bytes; break }
+        }
+        if (!psk) { setStatus('PSK 格式不对', '#ff5c7a'); log('解开了但内容不是 16 字节'); break }
         S.pskBytes = psk
-        log('拿到 PSK，' + psk.length + ' 字节')
+        log('拿到 PSK（16 字节）')
         if (f.sessionId) S.convId = f.sessionId
         tryFinishPairing()
       } catch (e) {
