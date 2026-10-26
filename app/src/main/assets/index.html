@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>大肥鱼远控</title>
+<style>
+  :root{--bg:#12121c;--card:#1c1c2b;--fg:#e8e8f0;--dim:#8a8aa0;--acc:#5b8cff;--ok:#3ecf8e;--err:#ff5c7a}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  body{display:flex;flex-direction:column}
+  header{padding:14px 16px;font-weight:600;font-size:16px;border-bottom:1px solid #26263a;
+    display:flex;align-items:center;gap:8px}
+  header .fish{font-size:20px}
+  #status{margin-left:auto;font-size:12px;color:var(--dim);font-weight:400}
+  main{flex:1;overflow:auto;padding:16px}
+  .card{background:var(--card);border:1px solid #2a2a40;border-radius:14px;padding:16px;margin-bottom:14px}
+  .card h2{margin:0 0 10px;font-size:15px}
+  .row{display:flex;gap:10px}
+  input{flex:1;background:#0e0e18;border:1px solid #33334a;color:var(--fg);
+    border-radius:10px;padding:12px;font-size:16px;letter-spacing:3px}
+  button{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:12px 18px;
+    font-size:15px;font-weight:600}
+  button:disabled{opacity:.45}
+  .muted{color:var(--dim);font-size:13px;line-height:1.6;margin:10px 0 0}
+  .big{font-size:13px;color:var(--dim);text-align:center;padding:24px 0}
+  .ok{color:var(--ok)}
+</style>
+</head>
+<body>
+  <header><span class="fish">🐟</span><span>大肥鱼远控</span><span id="status">启动中…</span></header>
+  <main>
+    <div class="card">
+      <h2>配对</h2>
+      <div class="row">
+        <input id="pairCode" inputmode="numeric" maxlength="6" placeholder="输入 6 位配对码" disabled>
+        <button id="connectBtn" disabled>连接</button>
+      </div>
+      <p class="muted">配对码显示在电脑上 DSH 的状态栏小卡片里。</p>
+    </div>
+    <div class="card">
+      <h2>会话</h2>
+      <div class="big" id="sessionBox">客户端逻辑正在接入，先验证编译管道 ✅</div>
+    </div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

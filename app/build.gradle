@@ -1,0 +1,34 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.dsh.remote'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.dsh.remote"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// 纯 WebView 外壳，零第三方依赖（不引 androidx，构建更稳、更快）
+dependencies {
+}

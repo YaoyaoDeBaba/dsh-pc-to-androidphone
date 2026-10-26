@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.DSHRemote" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#12121c</item>
+        <item name="android:navigationBarColor">#12121c</item>
+        <item name="android:windowBackground">#12121c</item>
+    </style>
+</resources>
