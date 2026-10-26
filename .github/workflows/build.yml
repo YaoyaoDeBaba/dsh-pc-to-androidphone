@@ -18,6 +18,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install JS dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Bundle client into assets
+        run: npm run build
+
       - name: Install clean Android SDK
         run: |
           set -e
@@ -28,15 +39,10 @@ jobs:
           unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdtools
           mv /tmp/cmdtools/cmdline-tools "$SDK_ROOT/cmdline-tools/latest"
           SM="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          echo "SDKMANAGER=$SM"
           yes | "$SM" --licenses > /dev/null 2>&1 || true
           "$SM" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "--- installed platforms ---"
-          ls -1 "$SDK_ROOT/platforms"
-          echo "--- installed build-tools ---"
-          ls -1 "$SDK_ROOT/build-tools"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
