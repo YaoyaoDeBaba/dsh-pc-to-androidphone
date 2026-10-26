@@ -5,76 +5,103 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>大肥鱼远控</title>
 <style>
-  :root{--bg:#12121c;--card:#1c1c2b;--fg:#e8e8f0;--dim:#8a8aa0;--acc:#5b8cff;--ok:#3ecf8e;--err:#ff5c7a}
+  :root{--bg:#12121c;--card:#1c1c2b;--fg:#e8e8f0;--dim:#8a8aa0;--acc:#5b8cff;--ok:#3ecf8e;--warn:#e0a83a;--err:#ff5c7a;--line:#2a2a40}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   [hidden]{display:none !important}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-  body{display:flex;flex-direction:column}
-  header{padding:12px 14px;font-weight:600;font-size:15px;border-bottom:1px solid #26263a;
-    display:flex;align-items:center;gap:8px;flex:0 0 auto}
-  header .fish{font-size:19px}
-  #status{margin-left:auto;font-size:12px;color:var(--dim);font-weight:400}
-  main{flex:1;overflow:auto;padding:12px}
-  .card{background:var(--card);border:1px solid #2a2a40;border-radius:12px;padding:12px;margin-bottom:12px}
+  body{display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+  header{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:9px 12px;
+    border-bottom:1px solid var(--line);background:#171724}
+  header .fish{font-size:18px}
+  #title{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52vw}
+  #status{margin-left:auto;font-size:11px;color:var(--dim);white-space:nowrap;max-width:30vw;overflow:hidden;text-overflow:ellipsis}
+  #backBtn{width:32px;height:32px;border-radius:50%;background:#26263a;color:#cfcfe0;border:0;font-size:19px;line-height:1;padding:0;flex:0 0 auto}
+  main{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:12px;-webkit-overflow-scrolling:touch}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
   .card h2{margin:0 0 10px;font-size:14px;display:flex;align-items:center;gap:8px}
   .card h2 button{margin-left:auto}
   .row{display:flex;gap:8px}
-  input{flex:1;background:#0e0e18;border:1px solid #33334a;color:var(--fg);
-    border-radius:9px;padding:11px;font-size:15px;min-width:0}
+  input{flex:1;min-width:0;background:#0e0e18;border:1px solid #33334a;color:var(--fg);border-radius:9px;padding:11px;font-size:15px}
   #pairCode{letter-spacing:4px;font-size:18px;text-align:center}
-  button{background:var(--acc);color:#fff;border:0;border-radius:9px;padding:11px 15px;
-    font-size:14px;font-weight:600;white-space:nowrap}
+  button{background:var(--acc);color:#fff;border:0;border-radius:9px;padding:11px 15px;font-size:14px;font-weight:600;white-space:nowrap}
   button.ghost{background:#26263a;color:#cfcfe0}
   button:disabled{opacity:.45}
-  button.session{display:block;width:100%;text-align:left;background:#23233a;color:var(--fg);
-    margin-bottom:8px;padding:12px;font-size:14px}
+  button.session{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:#23233a;color:var(--fg);margin-bottom:8px;padding:11px 12px;font-size:14px}
   button.session.active{background:#31427a}
+  button.session .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge{font-size:10px;padding:2px 7px;border-radius:9px;background:#33334a;color:#b8b8cc;flex:0 0 auto}
+  .badge.run{background:#1f5540;color:#5fe0a0}
+  .badge.attn{background:#5a4320;color:#f0c060}
   .muted{color:var(--dim);font-size:12px;line-height:1.6;margin:8px 0 0}
-  #messages{max-height:44vh;overflow:auto;margin-bottom:10px}
-  .msg{padding:9px 11px;border-radius:10px;margin-bottom:8px;font-size:14px;line-height:1.5;
-    white-space:pre-wrap;word-break:break-word}
-  .msg.ai{background:#20202f;border:1px solid #2c2c42}
-  .msg.me{background:#2b3a66}
-  #log{max-height:26vh;overflow:auto;font-size:11px;line-height:1.45;color:#9a9ab0;
-    margin:0;white-space:pre-wrap;word-break:break-all}
+  .msg{padding:9px 11px;border-radius:10px;margin-bottom:8px;font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  .msg.assistant,.msg.system{background:#20202f;border:1px solid #2c2c42}
+  .msg.user{background:#2b3a66;margin-left:16%}
+  .msg.tool{background:#191924;border:1px dashed #33334a;color:#9a9ab0;font-size:12px;padding:7px 10px}
+  .card.appr{background:#241a1a;border-color:#5a2a33}
+  .card.appr .t{font-weight:600;font-size:13px;margin-bottom:6px;word-break:break-word}
+  .card.appr .sub{font-size:12px;color:#c9a;line-height:1.5;margin-bottom:8px;word-break:break-word;white-space:pre-wrap}
+  .btns{display:flex;gap:8px;flex-wrap:wrap}
+  .btns button{flex:1;min-width:88px}
+  .btns button.no{background:#4a2a33}
+  .qq{margin-bottom:12px}
+  .qq .qt{font-size:13px;margin-bottom:7px;line-height:1.5}
+  .qopt{display:block;width:100%;text-align:left;background:#2a2a40;color:var(--fg);margin-bottom:6px;font-weight:400;font-size:13px;padding:10px 12px}
+  .qopt.on{background:#31427a}
+  footer{flex:0 0 auto;display:flex;gap:8px;padding:9px 12px;border-top:1px solid var(--line);
+    background:#171724;padding-bottom:calc(9px + env(safe-area-inset-bottom))}
+  #log{max-height:24vh;overflow:auto;font-size:11px;line-height:1.45;color:#9a9ab0;margin:0;white-space:pre-wrap;word-break:break-all}
 </style>
 </head>
 <body>
-  <header><span class="fish">🐟</span><span>大肥鱼远控</span><span id="status">启动中…</span></header>
-  <main>
-    <section id="pairCard" class="card">
-      <h2>配对</h2>
-      <div class="row">
-        <input id="pairCode" inputmode="numeric" maxlength="6" placeholder="6 位配对码">
-        <button id="connectBtn">连接</button>
-      </div>
-      <p class="muted">配对码显示在电脑上 DSH 状态栏那颗小鱼卡片里。</p>
-      <div class="row" style="margin-top:10px">
-        <input id="relayUrl" placeholder="中继地址">
-        <button id="saveRelayBtn" class="ghost">保存</button>
+  <header>
+    <button id="backBtn" hidden>‹</button>
+    <span class="fish">🐟</span>
+    <span id="title">大肥鱼远控</span>
+    <span id="status">启动中…</span>
+  </header>
+
+  <main id="main">
+    <section id="pairView">
+      <div class="card">
+        <h2>配对</h2>
+        <div class="row">
+          <input id="pairCode" inputmode="numeric" maxlength="6" placeholder="6 位配对码">
+          <button id="connectBtn">连接</button>
+        </div>
+        <p class="muted">配对码显示在电脑上 DSH 状态栏那颗小鱼卡片里。</p>
+        <div class="row" style="margin-top:10px">
+          <input id="relayUrl" placeholder="中继地址">
+          <button id="saveRelayBtn" class="ghost">保存</button>
+        </div>
       </div>
     </section>
 
-    <section id="listCard" class="card" hidden>
-      <h2>会话 <button id="refreshBtn" class="ghost">刷新</button></h2>
-      <div id="sessions"></div>
+    <section id="listView" hidden>
+      <div class="card">
+        <h2>会话 <button id="refreshBtn" class="ghost">刷新</button></h2>
+        <div id="sessions"></div>
+      </div>
     </section>
 
-    <section id="chatCard" class="card" hidden>
-      <h2 id="chatTitle">对话</h2>
+    <section id="chatView" hidden>
       <div id="messages"></div>
-      <div class="row">
-        <input id="msgInput" placeholder="说点什么…">
-        <button id="sendBtn">发</button>
-      </div>
     </section>
 
-    <section class="card">
-      <h2>日志 <button id="clearLog" class="ghost">清空</button></h2>
-      <pre id="log"></pre>
+    <section id="logCard">
+      <div class="card">
+        <h2>日志 <button id="clearLog" class="ghost">清空</button></h2>
+        <pre id="log"></pre>
+      </div>
     </section>
   </main>
+
+  <footer id="composer" hidden>
+    <input id="msgInput" placeholder="说点什么…">
+    <button id="sendBtn">发</button>
+    <button id="stopBtn" class="ghost" title="中断本轮">停</button>
+  </footer>
+
   <script src="app.js"></script>
 </body>
 </html>
