@@ -133,6 +133,8 @@ const S = {
   modelOf: readModelMap(),   // 每个会话记一份「上次选的模型 + 努力程度」
   hostModel: {},       // 电脑端 ev.model 广播来的真实模型名（用来显示；没选过时当兜底）
   fresh: {},           // 刚在手机上新建、还没标题的会话（列表里别藏起来）
+  cmdNames: {},        // cmdId → 'rename' | 'models' | 'set_model'（失败时给提示用）
+  modelErr: '',        // 取模型清单失败的原因
 }
 
 /* 模型选择按会话记在本地：重启 App 也能显示上次选的 */
@@ -496,6 +498,13 @@ function nextCmdId() {
   return 'cmd_' + Date.now().toString(36) + '_' + S.cmdSeq
 }
 
+// 记下「这条 cmdId 是哪个新功能发的」，失败时才能给出有用的提示
+function nextCmdIdFor(name) {
+  const id = nextCmdId()
+  S.cmdNames[id] = name
+  return id
+}
+
 function sendRaw(obj) {
   if (!S.ws || S.ws.readyState !== 1) { log('连接不在了，发不出去'); return }
   S.ws.send(JSON.stringify(obj))
@@ -541,7 +550,7 @@ function doRename() {
   closeRenameDialog()
   setStatus('改名…')
   log('[改名] ' + title)
-  sendSealed({ t: 'cmd.rename_session', cmdId: nextCmdId(), sessionId: S.current, title })
+  sendSealed({ t: 'cmd.rename_session', cmdId: nextCmdIdFor('rename'), sessionId: S.current, title })
 }
 
 /* ================= 模型 / 努力程度 ================= */
@@ -575,7 +584,8 @@ function openModelSheet() {
   if (!S.catalog) {
     setStatus('取模型清单…')
     log('[模型] 向电脑端要清单')
-    sendSealed({ t: 'cmd.get_models', cmdId: nextCmdId() })
+    S.modelErr = ''
+    sendSealed({ t: 'cmd.get_models', cmdId: nextCmdIdFor('models') })
   } else {
     renderModelSheet()
   }
@@ -588,7 +598,7 @@ function pickModel(provider, model, effort) {
   log('[模型] ' + provider + '/' + model + (effort ? ' · ' + effort : ''))
   setStatus('切换模型…')
   sendSealed({
-    t: 'cmd.set_model', cmdId: nextCmdId(), sessionId: S.current,
+    t: 'cmd.set_model', cmdId: nextCmdIdFor('set_model'), sessionId: S.current,
     provider, model, ...(effort ? { reasoningEffort: effort } : {})
   })
 }
@@ -599,7 +609,9 @@ function renderModelSheet() {
   if (!groups.length) {
     const d = document.createElement('div')
     d.className = 'muted'
-    d.textContent = S.catalog ? '这台电脑上没有可用模型' : '正在取模型清单…'
+    d.textContent = S.modelErr
+      ? '取不到清单：' + S.modelErr
+      : (S.catalog ? '这台电脑上没有可用模型' : '正在取模型清单…')
     el.modelList.appendChild(d)
     return
   }
@@ -700,14 +712,21 @@ function applyEvent(p) {
   }
   if (t === 'ev.result') {
     const d = p.data && typeof p.data === 'object' ? p.data : null
+    const wanted = S.cmdNames[p.cmdId]
+    if (wanted) delete S.cmdNames[p.cmdId]
     if (p.ok === false) {
-      log('[result] FAIL ' + (p.message || ''))
-      if (p.message) setStatus(String(p.message).slice(0, 40), '#e0a83a')
+      log('[result] FAIL ' + (p.message || '') + (wanted ? '（' + wanted + '）' : ''))
+      if (wanted === 'models') {
+        S.modelErr = p.message || '取不到模型清单'
+        renderModelSheet()
+      }
+      setStatus(wanted ? '失败：重启 DSH 再试' : String(p.message || '失败了').slice(0, 34), '#e0a83a')
     }
     if (d) {
       // 模型清单（cmd.get_models 的回执）
       if (d.kind === 'catalog' && d.catalog) {
         S.catalog = d.catalog
+        S.modelErr = ''
         if (Array.isArray(d.failures) && d.failures.length) log('[模型] 部分 provider 取不到：' + d.failures.map(x => x.id).join(','))
         renderModelSheet()
         refreshModelBadge()
@@ -1167,7 +1186,8 @@ function boot() {
   el.modelWrap?.addEventListener('click', (e) => { if (e.target === el.modelWrap) closeModelSheet() })
   el.modelRefresh?.addEventListener('click', () => {
     S.catalog = null
-    sendSealed({ t: 'cmd.get_models', cmdId: nextCmdId() })
+    S.modelErr = ''
+    sendSealed({ t: 'cmd.get_models', cmdId: nextCmdIdFor('models') })
     renderModelSheet()
   })
   el.clearLog?.addEventListener('click', () => { logLines.length = 0; if (el.log) el.log.textContent = '' })
