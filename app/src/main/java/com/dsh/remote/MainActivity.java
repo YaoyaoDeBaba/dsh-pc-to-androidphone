@@ -75,7 +75,8 @@ public class MainActivity extends Activity {
         webView.addJavascriptInterface(new Object() {
             @android.webkit.JavascriptInterface
             public void checkUpdate() {
-                runOnUiThread(() -> UpdateManager.check(MainActivity.this));
+                // 手动点「更新」：没新版/检查失败都要有反馈
+                runOnUiThread(() -> UpdateManager.check(MainActivity.this, true));
             }
 
             @android.webkit.JavascriptInterface

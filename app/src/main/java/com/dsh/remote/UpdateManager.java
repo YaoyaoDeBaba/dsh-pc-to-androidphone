@@ -3,6 +3,7 @@ package com.dsh.remote;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
@@ -68,8 +69,16 @@ public final class UpdateManager {
         if (l != null) l.log(msg);
     }
 
-    /** 后台查一次更新；有新版本就在主线程弹框。失败静默。 */
+    /** 启动时静默检查更新：有新版本才弹。 */
     public static void check(final Activity activity) {
+        check(activity, false);
+    }
+
+    /**
+     * 查最新 Release。手动检查（点「更新」按钮）没新版或失败时会弹提示，
+     * 自动检查保持静默，避免每次开 App 都打扰。
+     */
+    public static void check(final Activity activity, final boolean manual) {
         new Thread(() -> {
             try {
                 HttpURLConnection c = (HttpURLConnection) new URL(API).openConnection();
@@ -77,7 +86,13 @@ public final class UpdateManager {
                 c.setReadTimeout(8000);
                 c.setRequestProperty("Accept", "application/vnd.github+json");
                 c.setRequestProperty("User-Agent", "dsh-remote-updater");
-                if (c.getResponseCode() != 200) return;
+                if (c.getResponseCode() != 200) {
+                    if (manual) {
+                        toast(activity, "检查更新失败，请检查网络");
+                        log("检查更新失败: HTTP " + c.getResponseCode());
+                    }
+                    return;
+                }
 
                 StringBuilder sb = new StringBuilder();
                 BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream()));
@@ -97,13 +112,23 @@ public final class UpdateManager {
                 }
 
                 int local;
+                String localName;
                 try {
-                    local = activity.getPackageManager()
-                            .getPackageInfo(activity.getPackageName(), 0).versionCode;
+                    PackageInfo pi = activity.getPackageManager()
+                            .getPackageInfo(activity.getPackageName(), 0);
+                    local = pi.versionCode;
+                    localName = pi.versionName == null ? ("1.0." + local) : pi.versionName;
                 } catch (Exception e) {
                     return;
                 }
-                if (remote <= local) return;
+
+                if (remote <= local) {
+                    if (manual) {
+                        toast(activity, "当前版本 " + localName + "，已是最新版本");
+                        log("检查更新：当前 " + localName + "，已是最新版本");
+                    }
+                    return;
+                }
 
                 String apkUrl = null;
                 JSONArray assets = json.optJSONArray("assets");
@@ -121,7 +146,11 @@ public final class UpdateManager {
                 final String url = apkUrl;
                 final int ver = remote;
                 activity.runOnUiThread(() -> prompt(activity, ver, url));
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                if (manual) {
+                    toast(activity, "检查更新失败，请检查网络");
+                    log("检查更新失败: " + e.getMessage());
+                }
             }
         }).start();
     }
