@@ -32,6 +32,7 @@ const CANDIDATES = [
 const args = new Set(process.argv.slice(2))
 const checkOnly = args.has('--check')
 const restore = args.has('--restore')
+const statusOnly = args.has('--status')
 
 function findPlugin() {
   for (const p of CANDIDATES) if (fs.existsSync(p)) return p
@@ -63,6 +64,39 @@ const already = src.includes(MARK)
 if (checkOnly) {
   console.log(already ? '状态：已打过补丁' : '状态：未打补丁')
   process.exit(0)
+}
+
+// --status：补丁在不在 + 当前 DSH 进程是不是打完补丁之后才启动的
+if (statusOnly) {
+  const execSync = (await import('node:child_process')).execSync
+  console.log('补丁：' + (already ? '已打' : '未打'))
+  const statusFile = path.join(HOME, 'dsh-remote-control', 'status.json')
+  let pid = 0
+  try {
+    pid = JSON.parse(fs.readFileSync(statusFile, 'utf8')).pid || 0
+  } catch {
+    console.log('状态：读不到 ' + statusFile + '（远控插件可能没跑）')
+    process.exit(already ? 0 : 2)
+  }
+  const patchedAt = fs.statSync(target).mtime
+  let started = null
+  try {
+    const iso = execSync(
+      `powershell -NoProfile -Command "(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')"`,
+      { encoding: 'utf8' },
+    ).trim()
+    started = new Date(iso)
+  } catch {
+    console.log(`进程：pid ${pid}（查不到启动时间）`)
+  }
+  if (started) {
+    const fresh = started > patchedAt
+    console.log(`补丁写入：${patchedAt.toISOString()}`)
+    console.log(`当前 DSH：pid ${pid}，启动于 ${started.toISOString()}`)
+    console.log(fresh ? '结论：进程是打完补丁之后启动的 → 补丁已生效' : '结论：进程比补丁旧 → 重启 DSH 才生效')
+    process.exit(fresh && already ? 0 : 3)
+  }
+  process.exit(already ? 0 : 2)
 }
 if (already) {
   console.log('已打过补丁，跳过（要重打请先 --restore）')
