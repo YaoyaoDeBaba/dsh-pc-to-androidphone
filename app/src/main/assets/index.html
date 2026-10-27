@@ -35,6 +35,9 @@
   .badge{font-size:10px;padding:2px 7px;border-radius:9px;background:#33334a;color:#b8b8cc;flex:0 0 auto}
   .badge.run{background:#1f5540;color:#5fe0a0}
   .badge.attn{background:#5a4320;color:#f0c060}
+  .ws{font-size:11px;color:var(--dim);margin:14px 2px 7px;letter-spacing:.3px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #sessions .ws:first-child{margin-top:0}
   .muted{color:var(--dim);font-size:12px;line-height:1.6;margin:8px 0 0}
   .msg{padding:9px 11px;border-radius:10px;margin-bottom:8px;font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
   .msg.assistant,.msg.system{background:#20202f;border:1px solid #2c2c42}
@@ -82,7 +85,7 @@
 
     <section id="listView" hidden>
       <div class="card">
-        <h2>会话 <span class="sp"></span><button id="refreshBtn" class="ghost">刷新</button><button id="repairBtn" class="ghost">重新配对</button></h2>
+        <h2>会话 <span class="sp"></span><button id="refreshBtn" class="ghost">刷新</button><button id="updateBtn" class="ghost">更新</button><button id="repairBtn" class="ghost">重新配对</button></h2>
         <div id="sessions"></div>
       </div>
     </section>

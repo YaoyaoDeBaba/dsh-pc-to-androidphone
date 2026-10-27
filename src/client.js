@@ -122,6 +122,7 @@ const S = {
   statusText: '未连接',
   mode: 'pair',          // 'pair' = 输码配对；'resume' = 用存下来的会话重连
   gotData: false,        // 重连后是否收到过数据（看门狗用）
+  hostAway: false,       // 收到过「主机暂时离线」的提示
   reconnectTimer: 0,
   reconnectTries: 0,
   pingTimer: 0,
@@ -132,7 +133,7 @@ const $ = (id) => document.getElementById(id)
 const el = {}
 function initEls() {
   const ids = ['status', 'title', 'backBtn', 'pairView', 'listView', 'chatView', 'logCard',
-    'pairCode', 'connectBtn', 'relayUrl', 'saveRelayBtn', 'sessions', 'refreshBtn', 'repairBtn',
+    'pairCode', 'connectBtn', 'relayUrl', 'saveRelayBtn', 'sessions', 'refreshBtn', 'repairBtn', 'updateBtn',
     'messages', 'msgInput', 'sendBtn', 'stopBtn', 'composer', 'log', 'clearLog', 'main', 'reconnectBtn']
   for (const k of ids) el[k] = $(k)
 }
@@ -153,6 +154,22 @@ function log(...args) {
   if (el.log) {
     el.log.textContent = logLines.join('\n')
     el.log.scrollTop = el.log.scrollHeight
+  }
+}
+
+// 重连成功后收到数据：把状态从「重连中…」切回「已连接」；
+// 之前挂过「主机暂时离线」的，数据一到也立刻恢复。
+function noteConnected() {
+  const first = !S.gotData
+  S.gotData = true
+  if (S.mode !== 'resume') return
+  if (first) {
+    setStatus('已连接', '#3ecf8e')
+    log('重连成功')
+  } else if (S.hostAway) {
+    S.hostAway = false
+    setStatus('已连接', '#3ecf8e')
+    log('主机恢复在线')
   }
 }
 
@@ -239,13 +256,22 @@ function sessionState(s) {
   }
 }
 
+function workspaceLabel(ws) {
+  if (!ws) return '未指定工作区'
+  const parts = String(ws).split(/[\\/]+/).filter(Boolean)
+  if (!parts.length) return String(ws)
+  return parts.length > 2 ? parts.slice(-2).join('/') : parts.join('/')
+}
+
 function renderSessions() {
   if (!el.sessions) return
   el.sessions.innerHTML = ''
-  // 委派子会话（origin: 'subagent'）没有可读聊天内容，点进去必然是空的，直接不显示
+
+  // 过滤：委派子会话 + 没有标题的（这两类点进去必然是空的）
   const list = S.sessions
     .map(raw => raw.session ?? raw)
     .filter(s => s.origin !== 'subagent')
+    .filter(s => typeof s.title === 'string' && s.title.trim().length > 0)
 
   if (!list.length) {
     const d = document.createElement('div')
@@ -254,17 +280,33 @@ function renderSessions() {
     el.sessions.appendChild(d)
     return
   }
+
+  // 按工作区分组
+  const groups = new Map()
   for (const s of list) {
-    const id = s.id || s.sessionId || s.convId || ''
-    const title = s.title || s.name || s.label || '（未命名会话）'
-    const st = sessionState(s)
-    const btn = document.createElement('button')
-    btn.className = 'session' + (S.current === id ? ' active' : '')
-    const t = document.createElement('span'); t.className = 't'; t.textContent = title
-    const b = document.createElement('span'); b.className = 'badge ' + st.cls; b.textContent = st.text
-    btn.appendChild(t); btn.appendChild(b)
-    btn.onclick = () => openSession(id, title)
-    el.sessions.appendChild(btn)
+    const key = s.workspace || ''
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(s)
+  }
+
+  for (const [ws, items] of groups) {
+    const h = document.createElement('div')
+    h.className = 'ws'
+    h.textContent = workspaceLabel(ws) + '（' + items.length + '）'
+    el.sessions.appendChild(h)
+
+    for (const s of items) {
+      const id = s.id || s.sessionId || s.convId || ''
+      const title = s.title
+      const st = sessionState(s)
+      const btn = document.createElement('button')
+      btn.className = 'session' + (S.current === id ? ' active' : '')
+      const t = document.createElement('span'); t.className = 't'; t.textContent = title
+      const b = document.createElement('span'); b.className = 'badge ' + st.cls; b.textContent = st.text
+      btn.appendChild(t); btn.appendChild(b)
+      btn.onclick = () => openSession(id, title)
+      el.sessions.appendChild(btn)
+    }
   }
 }
 
@@ -739,7 +781,7 @@ function handleFrame(f) {
     case 'enc': {
       if (!S.kH2C) return
       const payload = openRecord(S.kH2C, f)
-      if (payload) { S.gotData = true; applyEvent(payload) }
+      if (payload) { noteConnected(); applyEvent(payload) }
       break
     }
 
@@ -747,14 +789,20 @@ function handleFrame(f) {
       if (!S.kH2C) return
       for (const it of (Array.isArray(f.items) ? f.items : [])) {
         const payload = openRecord(S.kH2C, it)
-        if (payload) { S.gotData = true; applyEvent(payload) }
+        if (payload) { noteConnected(); applyEvent(payload) }
       }
       break
     }
 
     case 'error':
-      setStatus('中继错误: ' + (f.code || ''), '#ff5c7a')
       log('error', f.code, f.message || '')
+      // 主机掉线的报错：当临时提示，数据回来就自动恢复，不吓人也不断连接
+      if (/host|peer|offline|gone/i.test(f.code || '')) {
+        S.hostAway = true
+        setStatus('主机暂时离线，等待恢复…', '#e0a83a')
+      } else if (!/session|unpaired|expired/i.test(f.code || '')) {
+        setStatus('中继错误: ' + (f.code || ''), '#ff5c7a')
+      }
       // 会话已被作废：存的那份 PSK 没用了，回去重新配对
       if (/session|unpaired|expired/i.test(f.code || '')) {
         clearSession()
@@ -765,8 +813,10 @@ function handleFrame(f) {
       break
 
     case 'peer-left':
-      setStatus('主机已离开', '#ff5c7a')
-      log('peer-left：主机离开')
+      // 不致命：只是 relay 报告主机那边断过线；数据回来就自动变「已连接」
+      S.hostAway = true
+      setStatus('主机暂时离线，等待恢复…', '#e0a83a')
+      log('peer-left：主机暂时离线')
       break
 
     case 'resume-gap':
@@ -828,6 +878,9 @@ function boot() {
   el.connectBtn?.addEventListener('click', () => connect(true))
   el.pairCode?.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(true) })
   el.refreshBtn?.addEventListener('click', () => { if (S.paired) cmdListSessions() })
+  el.updateBtn?.addEventListener('click', () => {
+    try { window.dshApp.checkUpdate() } catch (_) { log('「更新」只在 App 内可用') }
+  })
   el.backBtn?.addEventListener('click', goBack)
   el.sendBtn?.addEventListener('click', cmdSendPrompt)
   el.stopBtn?.addEventListener('click', cmdInterrupt)

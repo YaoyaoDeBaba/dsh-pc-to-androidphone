@@ -53,6 +53,17 @@ public class MainActivity extends Activity {
             }
         } catch (Exception ignored) {
         }
+
+        // 页面上的「更新」按钮走这里
+        webView.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public void checkUpdate() {
+                runOnUiThread(() -> UpdateManager.check(MainActivity.this));
+            }
+        }, "dshApp");
+
+        // 启动时静默查一次有没有新版本
+        UpdateManager.check(this);
     }
 
     @Override

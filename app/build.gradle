@@ -2,6 +2,11 @@ plugins {
     id 'com.android.application'
 }
 
+// 版本号由 CI 传进来：-PversionCode=<构建序号>
+// 手机端拿 versionCode 跟最新 Release 的 build-N 比较，判断要不要提示更新
+def vc = (project.findProperty("versionCode") ?: "1").toString().toInteger()
+def vn = (project.findProperty("versionName") ?: "1.0.${vc}").toString()
+
 android {
     namespace 'com.dsh.remote'
     compileSdk 34
@@ -10,8 +15,8 @@ android {
         applicationId "com.dsh.remote"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode vc
+        versionName vn
     }
 
     buildTypes {
