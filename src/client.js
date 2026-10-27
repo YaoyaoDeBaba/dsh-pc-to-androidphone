@@ -132,6 +132,7 @@ const S = {
   catalog: null,       // 电脑端返回的模型清单 { default, groups:[{id,name,models:[{id,name,efforts?,defaultEffort?}]}] }
   modelOf: readModelMap(),   // 每个会话记一份「上次选的模型 + 努力程度」
   hostModel: {},       // 电脑端 ev.model 广播来的真实模型名（用来显示；没选过时当兜底）
+  fresh: {},           // 刚在手机上新建、还没标题的会话（列表里别藏起来）
 }
 
 /* 模型选择按会话记在本地：重启 App 也能显示上次选的 */
@@ -299,7 +300,13 @@ function renderSessions() {
   const list = S.sessions
     .map(raw => raw.session ?? raw)
     .filter(s => s.origin !== 'subagent')
-    .filter(s => typeof s.title === 'string' && s.title.trim().length > 0)
+    // 没标题的会话一般藏起来（桌面端那些空会话太占屏）；但刚在手机上新建的、
+    // 以及正开着的，要留着 —— 否则「新建完返回列表就找不到它」
+    .filter(s => {
+      const id = s.id || s.sessionId || s.convId || ''
+      const titled = typeof s.title === 'string' && s.title.trim().length > 0
+      return titled || S.fresh[id] || id === S.current
+    })
 
   if (!list.length) {
     const d = document.createElement('div')
@@ -331,7 +338,9 @@ function renderSessions() {
 
     for (const s of items) {
       const id = s.id || s.sessionId || s.convId || ''
-      const title = s.title
+      const titled = typeof s.title === 'string' && s.title.trim().length > 0
+      if (titled) delete S.fresh[id]
+      const title = titled ? s.title : '新会话'
       const st = sessionState(s)
       const btn = document.createElement('button')
       btn.className = 'session' + (S.current === id ? ' active' : '')
@@ -725,6 +734,7 @@ function applyEvent(p) {
       // 新建会话成功 → 直接进去
       if (d.sessionId && !d.kind) {
         log('[新建会话] 已创建 ' + d.sessionId)
+        S.fresh[d.sessionId] = true
         openSession(d.sessionId, '新会话')
       }
     }
