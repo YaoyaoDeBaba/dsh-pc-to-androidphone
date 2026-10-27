@@ -126,6 +126,7 @@ const S = {
   reconnectTimer: 0,
   reconnectTries: 0,
   pingTimer: 0,
+  logOpen: false,      // 日志栏是否展开（默认收起；用户可随时切换并记住）
 }
 
 /* ================= DOM ================= */
@@ -234,12 +235,13 @@ function showView(name) {
   el.pairView.hidden = name !== 'pair'
   el.listView.hidden = name !== 'list'
   el.chatView.hidden = name !== 'chat'
-  el.logCard.hidden = name === 'chat'
+  el.logCard.hidden = !S.logOpen   // 日志栏展开/收起由用户决定，换页不重置
   el.composer.hidden = name !== 'chat'
   el.backBtn.hidden = name !== 'chat'
   if (el.title) el.title.textContent = name === 'chat' ? (S.currentTitle || '对话') : '大肥鱼远控'
   if (name === 'chat' && el.main) el.main.scrollTop = el.main.scrollHeight
   if (el.reconnectBtn) el.reconnectBtn.hidden = !!S.paired
+  if (el.logToggleBtn) el.logToggleBtn.textContent = S.logOpen ? '收起' : '日志'
 }
 
 /* ================= 会话列表（含状态徽标） ================= */
@@ -861,6 +863,11 @@ function tryFinishPairing() {
 function boot() {
   initEls()
 
+  // 日志栏偏好：记住上次是收起还是展开（默认收起）
+  S.logOpen = localStorage.getItem('drc.logOpen') === '1'
+  el.logCard.hidden = !S.logOpen
+  if (el.logToggleBtn) el.logToggleBtn.textContent = S.logOpen ? '收起' : '日志'
+
   if (el.relayUrl) {
     el.relayUrl.value = S.relay
     el.saveRelayBtn?.addEventListener('click', () => {
@@ -887,10 +894,12 @@ function boot() {
   el.msgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cmdSendPrompt() })
   el.clearLog?.addEventListener('click', () => { logLines.length = 0; if (el.log) el.log.textContent = '' })
 
-  // 日志栏：默认收起，点「日志」展开，再点「收起」缩回
+  // 日志栏：点「日志」展开，再点「收起」缩回；选择会被记住
   el.logToggleBtn?.addEventListener('click', () => {
-    el.logCard.hidden = !el.logCard.hidden
-    el.logToggleBtn.textContent = el.logCard.hidden ? '日志' : '收起'
+    S.logOpen = !S.logOpen
+    localStorage.setItem('drc.logOpen', S.logOpen ? '1' : '0')
+    el.logCard.hidden = !S.logOpen
+    el.logToggleBtn.textContent = S.logOpen ? '收起' : '日志'
   })
 
   el.reconnectBtn?.addEventListener('click', () => {
