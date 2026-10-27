@@ -28,5 +28,11 @@
             android:name=".KeepAliveService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <provider
+            android:name=".ApkProvider"
+            android:authorities="com.dsh.remote.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
