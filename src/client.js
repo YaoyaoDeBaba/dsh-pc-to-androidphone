@@ -127,6 +127,8 @@ const S = {
   reconnectTries: 0,
   pingTimer: 0,
   logOpen: false,      // 日志栏是否展开（默认收起；用户可随时切换并记住）
+  lastSent: null,      // 最近一次发出的 prompt：{ text, at }，用于识别 host 的重复回显
+  replaying: false,    // 正在回放历史（历史里的同文本消息不能按"重复"去重）
 }
 
 /* ================= DOM ================= */
@@ -502,7 +504,8 @@ function cmdSendPrompt() {
   const text = (el.msgInput?.value || '').trim()
   if (!text || !S.current) return
   el.msgInput.value = ''
-  S.msgs.push({ id: 'me_' + Date.now(), role: 'user', text, pending: true })
+  S.lastSent = { text, at: Date.now() }
+  S.msgs.push({ id: 'me_' + Date.now(), role: 'user', text, pending: true, at: Date.now() })
   renderMessages()
   sendSealed({ t: 'cmd.send_prompt', cmdId: nextCmdId(), sessionId: S.current, text })
 }
@@ -556,11 +559,38 @@ function applyEvent(p) {
   switch (t) {
     case 'ev.message_delta': {
       const mid = p.messageId || ('m_' + Date.now())
-      // 本机乐观插入的用户消息：host 回显同一句话时合并，避免重复
+      const text = typeof p.delta === 'string' ? p.delta : ''
+
+      // —— 用户消息：host 会把同一条发两遍（排队消息先走 agent/inbox/spliced，
+      //    进正史后 user/message 再发一次；两帧可能同 messageId 也可能不同），
+      //    这里按"同一条消息只留一个气泡、文本不叠加"处理 ——
       if (p.role === 'user') {
-        const idx = S.msgs.findIndex(m => m.pending && m.text === p.delta)
-        if (idx >= 0) S.msgs.splice(idx, 1)
+        // 1) 同 messageId 的气泡（第二帧会和第一帧撞上）
+        let m = S.msgs.find(x => x.kind !== 'tool' && x.id === mid)
+        // 2) 不同 messageId 但我刚发出去的同一句话（15 秒窗口内；历史回放不参与）
+        if (!m && text && !S.replaying && S.lastSent && S.lastSent.text === text
+            && Date.now() - S.lastSent.at < 15000) {
+          m = S.msgs.find(x => x.kind === 'msg' && x.role === 'user' && x.text === text)
+        }
+        // 3) 本机乐观插入的那条：已经有真气泡就删掉，没有就转正（不重开一个）
+        const pend = S.msgs.find(x => x.pending && x.text === text)
+        if (pend) {
+          if (m && m !== pend) S.msgs.splice(S.msgs.indexOf(pend), 1)
+          else if (!m) { pend.pending = false; pend.at = Date.now(); m = pend }
+        }
+        if (!m) {
+          m = { id: mid, kind: 'msg', role: 'user', text, at: Date.now() }
+          S.msgs.push(m)
+        } else if (text && m.text !== text && text.startsWith(m.text)) {
+          // 累计式重发（"abc"→"abcd"）：替换；否则保留原文本，绝不叠加
+          m.text = text
+        }
+        if (p.done) m.done = true
+        scheduleRender()
+        break
       }
+
+      // —— 助理 / 其它角色：原有流式拼接 ——
       let m = S.msgs.find(x => x.id === mid && x.kind !== 'tool')
       if (!m) { m = { id: mid, kind: 'msg', role: p.role || 'assistant', text: '' }; S.msgs.push(m) }
       if (typeof p.delta === 'string') m.text += p.delta
@@ -606,7 +636,9 @@ function applyEvent(p) {
     case 'ev.session_history': {
       if (!S.historyLoaded) { S.msgs = []; S.historyLoaded = true }
       const items = Array.isArray(p.items) ? p.items : []
+      S.replaying = true
       for (const it of items) applyEvent(it)
+      S.replaying = false
       renderMessages()
       break
     }
