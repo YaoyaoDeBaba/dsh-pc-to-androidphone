@@ -18,6 +18,15 @@ import android.webkit.WebViewClient;
 public class MainActivity extends Activity {
 
     private WebView webView;
+    private long lastUpdateCheck = 0;
+
+    /** 打开/回到前台时检查更新；30 秒内不重复弹，避免叠弹窗。 */
+    private void checkUpdateIfStale() {
+        long now = System.currentTimeMillis();
+        if (now - lastUpdateCheck < 30_000) return;
+        lastUpdateCheck = now;
+        UpdateManager.check(this);
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -63,7 +72,14 @@ public class MainActivity extends Activity {
         }, "dshApp");
 
         // 启动时静默查一次有没有新版本
-        UpdateManager.check(this);
+        checkUpdateIfStale();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 每次回到前台都看看有没有新版本（会话页的「更新」按钮也能手动触发）
+        checkUpdateIfStale();
     }
 
     @Override

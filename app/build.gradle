@@ -19,9 +19,21 @@ android {
         versionName vn
     }
 
+    signingConfigs {
+        // 固定签名钥匙（已提交进仓库，见 keystore/dsh-release.jks）：
+        // 保证每个版本签名一致，升级时可直接覆盖安装，不用卸载
+        debug {
+            storeFile file('../keystore/dsh-release.jks')
+            storePassword 'dshrelease'
+            keyAlias 'dsh'
+            keyPassword 'dshrelease'
+        }
+    }
+
     buildTypes {
         debug {
             debuggable true
+            signingConfig signingConfigs.debug
         }
         release {
             minifyEnabled false
