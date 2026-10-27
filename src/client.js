@@ -120,6 +120,11 @@ const S = {
   qSel: {},      // requestId -> { questionId: [optionId] }
   running: {},   // dshSessionId -> boolean
   statusText: '未连接',
+  mode: 'pair',          // 'pair' = 输码配对；'resume' = 用存下来的会话重连
+  gotData: false,        // 重连后是否收到过数据（看门狗用）
+  reconnectTimer: 0,
+  reconnectTries: 0,
+  pingTimer: 0,
 }
 
 /* ================= DOM ================= */
@@ -127,8 +132,8 @@ const $ = (id) => document.getElementById(id)
 const el = {}
 function initEls() {
   const ids = ['status', 'title', 'backBtn', 'pairView', 'listView', 'chatView', 'logCard',
-    'pairCode', 'connectBtn', 'relayUrl', 'saveRelayBtn', 'sessions', 'refreshBtn',
-    'messages', 'msgInput', 'sendBtn', 'stopBtn', 'composer', 'log', 'clearLog', 'main']
+    'pairCode', 'connectBtn', 'relayUrl', 'saveRelayBtn', 'sessions', 'refreshBtn', 'repairBtn',
+    'messages', 'msgInput', 'sendBtn', 'stopBtn', 'composer', 'log', 'clearLog', 'main', 'reconnectBtn']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -151,6 +156,61 @@ function log(...args) {
   }
 }
 
+/* ================= 会话持久化 / 重连 ================= */
+function loadSession() {
+  try {
+    const psk = localStorage.getItem('drc.psk')
+    const conv = localStorage.getItem('drc.conv')
+    if (!psk || !conv) return null
+    return { psk: b64d(psk), conv }
+  } catch (_) { return null }
+}
+
+function saveSession(pskBytes, conv) {
+  localStorage.setItem('drc.psk', b64e(pskBytes))
+  localStorage.setItem('drc.conv', conv)
+}
+
+function clearSession() {
+  localStorage.removeItem('drc.psk')
+  localStorage.removeItem('drc.conv')
+  localStorage.removeItem('drc.seq')
+}
+
+function stopPing() {
+  if (S.pingTimer) { clearInterval(S.pingTimer); S.pingTimer = 0 }
+}
+
+function startPing() {
+  stopPing()
+  // 25 秒一次心跳：既防中间设备掐空闲连接，也检测链路是否还活着
+  S.pingTimer = setInterval(() => {
+    if (S.ws && S.ws.readyState === 1) sendRaw({ t: 'ping', ts: Date.now() })
+  }, 25000)
+}
+
+function stopReconnect() {
+  if (S.reconnectTimer) { clearTimeout(S.reconnectTimer); S.reconnectTimer = 0 }
+}
+
+function scheduleReconnect() {
+  if (S.reconnectTimer) return
+  if (!loadSession()) {
+    S.paired = false
+    setStatus('已断开，需要重新配对', '#ff5c7a')
+    showView('pair')
+    return
+  }
+  S.reconnectTries += 1
+  const delay = Math.min(30000, 1500 * Math.pow(1.6, S.reconnectTries - 1))
+  setStatus('断开，' + Math.round(delay / 1000) + ' 秒后重连…', '#e0a83a')
+  if (el.reconnectBtn) el.reconnectBtn.hidden = false
+  S.reconnectTimer = setTimeout(() => {
+    S.reconnectTimer = 0
+    connect()
+  }, delay)
+}
+
 /* ================= 视图切换 ================= */
 function showView(name) {
   S.view = name
@@ -162,6 +222,7 @@ function showView(name) {
   el.backBtn.hidden = name !== 'chat'
   if (el.title) el.title.textContent = name === 'chat' ? (S.currentTitle || '对话') : '大肥鱼远控'
   if (name === 'chat' && el.main) el.main.scrollTop = el.main.scrollHeight
+  if (el.reconnectBtn) el.reconnectBtn.hidden = !!S.paired
 }
 
 /* ================= 会话列表（含状态徽标） ================= */
@@ -181,17 +242,21 @@ function sessionState(s) {
 function renderSessions() {
   if (!el.sessions) return
   el.sessions.innerHTML = ''
-  if (!S.sessions.length) {
+  // 委派子会话（origin: 'subagent'）没有可读聊天内容，点进去必然是空的，直接不显示
+  const list = S.sessions
+    .map(raw => raw.session ?? raw)
+    .filter(s => s.origin !== 'subagent')
+
+  if (!list.length) {
     const d = document.createElement('div')
     d.className = 'muted'
     d.textContent = '还没有会话（点刷新试试）'
     el.sessions.appendChild(d)
     return
   }
-  for (const raw of S.sessions) {
-    const s = raw.session ?? raw
+  for (const s of list) {
     const id = s.id || s.sessionId || s.convId || ''
-    const title = s.title || s.name || s.label || id || '会话'
+    const title = s.title || s.name || s.label || '（未命名会话）'
     const st = sessionState(s)
     const btn = document.createElement('button')
     btn.className = 'session' + (S.current === id ? ' active' : '')
@@ -223,6 +288,13 @@ function renderMessages() {
     const d = document.createElement('div')
     d.className = 'msg ' + (m.kind === 'tool' ? 'tool' : (m.role || 'assistant'))
     d.textContent = m.text
+    el.messages.appendChild(d)
+  }
+  // 空状态：至少告诉用户"这里没内容"，而不是一片空白
+  if (!S.msgs.length && Object.keys(S.cards).length === 0) {
+    const d = document.createElement('div')
+    d.className = 'muted'
+    d.textContent = S.historyLoaded ? '（这个会话没有消息）' : '加载中…'
     el.messages.appendChild(d)
   }
   // 当前会话里还挂着的卡（审批 / 提问）
@@ -349,6 +421,8 @@ function sendSealed(payload) {
   const nonce = counterNonce(S.noncePre, S.outSeq)
   const seq = S.outSeq
   S.outSeq += 1
+  // 序号必须跨重连继续递增：同一个 PSK 下重复 nonce 会毁掉加密
+  try { localStorage.setItem('drc.seq', String(S.outSeq)) } catch (_) {}
   const rec = seal(S.kC2H, payload, nonce)
   sendRaw({ t: 'enc', sessionId: S.convId, seq, ciphertext: rec.ciphertext })
 }
@@ -508,21 +582,41 @@ function applyEvent(p) {
 }
 
 /* ================= 连接 / 握手 / 配对 ================= */
-function connect() {
-  const code = (el.pairCode?.value || '').trim()
-  if (!/^\d{6}$/.test(code)) { setStatus('配对码要 6 位数字', '#ff5c7a'); return }
+function connect(forcePair) {
+  const stored = loadSession()
+  let mode
 
-  S.pendingCode = code
+  if (forcePair === true) {
+    const code = (el.pairCode?.value || '').trim()
+    if (!/^\d{6}$/.test(code)) { setStatus('配对码要 6 位数字', '#ff5c7a'); return }
+    clearSession()
+    S.pendingCode = code
+    S.pskBytes = null
+    S.convId = ''
+    mode = 'pair'
+  } else if (stored) {
+    S.pendingCode = ''
+    S.pskBytes = stored.psk
+    S.convId = stored.conv
+    mode = 'resume'
+  } else {
+    setStatus('请先输入配对码', '#ff5c7a')
+    showView('pair')
+    return
+  }
+
+  S.mode = mode
+  stopReconnect()
   S.paired = false
-  S.convId = ''
-  S.pskBytes = null
+  S.gotData = false
   S.kC2H = null
   S.kH2C = null
   S.keypair = nacl.box.keyPair()
-  S.outSeq = 1
+  // 配对新一代 PSK 时序号从 1 开始；重连必须接着上次的序号，否则 nonce 重用
+  S.outSeq = mode === 'pair' ? 1 : (parseInt(localStorage.getItem('drc.seq') || '1', 10) || 1)
 
-  setStatus('连接中…', '#5b8cff')
-  log('连接 ' + S.relay)
+  setStatus(mode === 'resume' ? '重连中…' : '连接中…', '#5b8cff')
+  log((mode === 'resume' ? '重连 ' : '连接 ') + S.relay)
 
   try { S.ws?.close() } catch (_) {}
   const ws = new WebSocket(S.relay)
@@ -544,11 +638,14 @@ function connect() {
   }
 
   ws.onclose = () => {
-    setStatus(S.paired ? '连接断开' : '连接关闭', '#ff5c7a')
+    stopPing()
+    if (S.ws !== ws) return   // 主动换连接，忽略旧 socket 的关闭
     log('连接关闭')
+    if (S.paired || S.mode === 'resume') scheduleReconnect()
+    else setStatus('连接关闭', '#ff5c7a')
   }
 
-  ws.onerror = () => { setStatus('连接出错', '#ff5c7a'); log('WebSocket 错误') }
+  ws.onerror = () => { log('WebSocket 错误') }
 }
 
 function handleFrame(f) {
@@ -563,6 +660,29 @@ function handleFrame(f) {
       }
       if (typeof f.protocol === 'number' && f.protocol !== PROTOCOL_VERSION) {
         setStatus('协议版本不匹配 (' + f.protocol + ')', '#ff5c7a')
+        return
+      }
+      if (S.mode === 'resume' && S.pskBytes && S.convId) {
+        S.kC2H = deriveKey(S.pskBytes, 'c2h', S.convId)
+        S.kH2C = deriveKey(S.pskBytes, 'h2c', S.convId)
+        S.noncePre = noncePrefix(S.pskBytes, S.convId, S.clientId || 'anon')
+        S.paired = true
+        S.gotData = false
+        startPing()
+        setStatus('重连中…', '#5b8cff')
+        S.current = null
+        S.msgs = []
+        S.cards = {}
+        showView('list')
+        renderSessions()
+        cmdListSessions()
+        // 5 秒看门狗：重连后没有任何数据，提示一下（不销毁会话，避免误判）
+        setTimeout(() => {
+          if (!S.gotData && S.mode === 'resume') {
+            log('重连后 5 秒仍无数据')
+            setStatus('重连无响应，可点重连重试', '#e0a83a')
+          }
+        }, 5000)
         return
       }
       setStatus('配对中…', '#5b8cff')
@@ -619,7 +739,7 @@ function handleFrame(f) {
     case 'enc': {
       if (!S.kH2C) return
       const payload = openRecord(S.kH2C, f)
-      if (payload) applyEvent(payload)
+      if (payload) { S.gotData = true; applyEvent(payload) }
       break
     }
 
@@ -627,7 +747,7 @@ function handleFrame(f) {
       if (!S.kH2C) return
       for (const it of (Array.isArray(f.items) ? f.items : [])) {
         const payload = openRecord(S.kH2C, it)
-        if (payload) applyEvent(payload)
+        if (payload) { S.gotData = true; applyEvent(payload) }
       }
       break
     }
@@ -635,6 +755,13 @@ function handleFrame(f) {
     case 'error':
       setStatus('中继错误: ' + (f.code || ''), '#ff5c7a')
       log('error', f.code, f.message || '')
+      // 会话已被作废：存的那份 PSK 没用了，回去重新配对
+      if (/session|unpaired|expired/i.test(f.code || '')) {
+        clearSession()
+        S.mode = 'pair'
+        S.paired = false
+        showView('pair')
+      }
       break
 
     case 'peer-left':
@@ -658,10 +785,14 @@ function tryFinishPairing() {
   if (S.paired) return
   if (!S.convId || !S.pskBytes) return
   S.paired = true
+  S.mode = 'resume'
+  S.reconnectTries = 0
   S.kC2H = deriveKey(S.pskBytes, 'c2h', S.convId)
   S.kH2C = deriveKey(S.pskBytes, 'h2c', S.convId)
   S.noncePre = noncePrefix(S.pskBytes, S.convId, S.clientId || 'anon')
   S.outSeq = 1
+  saveSession(S.pskBytes, S.convId)
+  startPing()
 
   setStatus('已配对', '#3ecf8e')
   log('配对完成，拉会话列表')
@@ -694,8 +825,8 @@ function boot() {
     })
   }
 
-  el.connectBtn?.addEventListener('click', connect)
-  el.pairCode?.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect() })
+  el.connectBtn?.addEventListener('click', () => connect(true))
+  el.pairCode?.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(true) })
   el.refreshBtn?.addEventListener('click', () => { if (S.paired) cmdListSessions() })
   el.backBtn?.addEventListener('click', goBack)
   el.sendBtn?.addEventListener('click', cmdSendPrompt)
@@ -703,9 +834,45 @@ function boot() {
   el.msgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cmdSendPrompt() })
   el.clearLog?.addEventListener('click', () => { logLines.length = 0; if (el.log) el.log.textContent = '' })
 
+  el.reconnectBtn?.addEventListener('click', () => {
+    S.reconnectTries = 0
+    stopReconnect()
+    connect()
+  })
+
+  // 重新配对：清掉旧会话，回到配对页
+  el.repairBtn?.addEventListener('click', () => {
+    clearSession()
+    stopReconnect()
+    stopPing()
+    try { S.ws?.close() } catch (_) {}
+    S.ws = null
+    S.mode = 'pair'
+    S.paired = false
+    showView('pair')
+    setStatus('请输入新的配对码')
+  })
+
+  // 回到前台立刻重连，不等退避；切后台时靠前台服务+心跳尽量撑住
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return
+    if (S.ws && S.ws.readyState === 1) return
+    if (loadSession()) {
+      S.reconnectTries = 0
+      stopReconnect()
+      connect()
+    }
+  })
+
   setStatus('未连接')
-  showView('pair')
   log('客户端已加载，中继: ' + S.relay)
+
+  if (loadSession()) {
+    log('发现已保存的配对，自动重连')
+    connect()
+  } else {
+    showView('pair')
+  }
 }
 
 if (document.readyState === 'loading') {

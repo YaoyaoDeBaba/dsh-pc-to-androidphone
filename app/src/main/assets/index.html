@@ -14,13 +14,15 @@
   header{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:9px 12px;
     border-bottom:1px solid var(--line);background:#171724}
   header .fish{font-size:18px}
-  #title{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52vw}
-  #status{margin-left:auto;font-size:11px;color:var(--dim);white-space:nowrap;max-width:30vw;overflow:hidden;text-overflow:ellipsis}
+  #title{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:44vw}
+  #status{margin-left:auto;font-size:11px;color:var(--dim);white-space:nowrap;max-width:26vw;overflow:hidden;text-overflow:ellipsis}
+  #reconnectBtn{padding:6px 11px;font-size:12px;flex:0 0 auto}
   #backBtn{width:32px;height:32px;border-radius:50%;background:#26263a;color:#cfcfe0;border:0;font-size:19px;line-height:1;padding:0;flex:0 0 auto}
   main{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:12px;-webkit-overflow-scrolling:touch}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
-  .card h2{margin:0 0 10px;font-size:14px;display:flex;align-items:center;gap:8px}
-  .card h2 button{margin-left:auto}
+  .card h2{margin:0 0 10px;font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+  .card h2 .sp{flex:1}
+  .card h2 button{flex:0 0 auto;padding:7px 11px;font-size:12px}
   .row{display:flex;gap:8px}
   input{flex:1;min-width:0;background:#0e0e18;border:1px solid #33334a;color:var(--fg);border-radius:9px;padding:11px;font-size:15px}
   #pairCode{letter-spacing:4px;font-size:18px;text-align:center}
@@ -59,6 +61,7 @@
     <span class="fish">🐟</span>
     <span id="title">大肥鱼远控</span>
     <span id="status">启动中…</span>
+    <button id="reconnectBtn" hidden>重连</button>
   </header>
 
   <main id="main">
@@ -79,7 +82,7 @@
 
     <section id="listView" hidden>
       <div class="card">
-        <h2>会话 <button id="refreshBtn" class="ghost">刷新</button></h2>
+        <h2>会话 <span class="sp"></span><button id="refreshBtn" class="ghost">刷新</button><button id="repairBtn" class="ghost">重新配对</button></h2>
         <div id="sessions"></div>
       </div>
     </section>

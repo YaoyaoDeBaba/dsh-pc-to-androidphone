@@ -2,6 +2,7 @@ package com.dsh.remote;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.webkit.WebSettings;
@@ -41,6 +42,17 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient());
 
         webView.loadUrl("file:///android_asset/index.html");
+
+        // 前台服务保活：切后台时尽量不让系统冻结 WebView 与 WebSocket
+        try {
+            Intent svc = new Intent(this, KeepAliveService.class);
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(svc);
+            } else {
+                startService(svc);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
