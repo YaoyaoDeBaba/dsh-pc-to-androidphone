@@ -134,7 +134,7 @@ const el = {}
 function initEls() {
   const ids = ['status', 'title', 'backBtn', 'pairView', 'listView', 'chatView', 'logCard',
     'pairCode', 'connectBtn', 'relayUrl', 'saveRelayBtn', 'sessions', 'refreshBtn', 'repairBtn', 'updateBtn',
-    'messages', 'msgInput', 'sendBtn', 'stopBtn', 'composer', 'log', 'clearLog', 'main', 'reconnectBtn']
+    'messages', 'msgInput', 'sendBtn', 'stopBtn', 'composer', 'log', 'clearLog', 'logToggleBtn', 'main', 'reconnectBtn']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -886,6 +886,12 @@ function boot() {
   el.stopBtn?.addEventListener('click', cmdInterrupt)
   el.msgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cmdSendPrompt() })
   el.clearLog?.addEventListener('click', () => { logLines.length = 0; if (el.log) el.log.textContent = '' })
+
+  // 日志栏：默认收起，点「日志」展开，再点「收起」缩回
+  el.logToggleBtn?.addEventListener('click', () => {
+    el.logCard.hidden = !el.logCard.hidden
+    el.logToggleBtn.textContent = el.logCard.hidden ? '日志' : '收起'
+  })
 
   el.reconnectBtn?.addEventListener('click', () => {
     S.reconnectTries = 0

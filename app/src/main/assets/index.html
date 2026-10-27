@@ -65,6 +65,7 @@
     <span id="title">大肥鱼远控</span>
     <span id="status">启动中…</span>
     <button id="reconnectBtn" hidden>重连</button>
+    <button id="logToggleBtn" class="ghost">日志</button>
   </header>
 
   <main id="main">
@@ -94,7 +95,7 @@
       <div id="messages"></div>
     </section>
 
-    <section id="logCard">
+    <section id="logCard" hidden>
       <div class="card">
         <h2>日志 <button id="clearLog" class="ghost">清空</button></h2>
         <pre id="log"></pre>
