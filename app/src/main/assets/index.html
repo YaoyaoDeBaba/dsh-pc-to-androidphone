@@ -18,6 +18,23 @@
   #status{margin-left:auto;font-size:11px;color:var(--dim);white-space:nowrap;max-width:26vw;overflow:hidden;text-overflow:ellipsis}
   #reconnectBtn{padding:6px 11px;font-size:12px;flex:0 0 auto}
   #backBtn{width:32px;height:32px;border-radius:50%;background:#26263a;color:#cfcfe0;border:0;font-size:19px;line-height:1;padding:0;flex:0 0 auto}
+  #renameBtn{padding:5px 8px;font-size:12px;flex:0 0 auto}
+  #modelBtn{padding:5px 9px;font-size:11px;font-weight:500;max-width:24vw;overflow:hidden;text-overflow:ellipsis;flex:0 0 auto}
+  .wsAdd{float:right;padding:2px 8px;font-size:11px;background:#2a2a40;color:#cfcfe0;border-radius:7px;margin-top:-3px}
+  #dlgWrap,#modelWrap{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+  .dlg{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;width:100%;max-width:430px}
+  .dlgT{font-weight:600;font-size:14px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .dlgT .sp{flex:1}
+  .sheet{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;width:100%;max-width:470px;max-height:82vh;display:flex;flex-direction:column}
+  #modelList{overflow:auto;margin-top:2px}
+  .mgroup{font-size:11px;color:var(--dim);margin:10px 2px 6px}
+  .mitem{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:#23233a;color:var(--fg);margin-bottom:6px;padding:10px 12px;font-size:13px;font-weight:500}
+  .mitem.on{background:#31427a}
+  .mitem .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mitem .k{font-size:10px;color:#b8b8cc;flex:0 0 auto}
+  .eff{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}
+  .eff button{padding:5px 10px;font-size:12px;background:#2a2a40;color:#cfcfe0}
+  .eff button.on{background:var(--acc)}
   main{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:12px;-webkit-overflow-scrolling:touch}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
   .card h2{margin:0 0 10px;font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
@@ -63,6 +80,8 @@
     <button id="backBtn" hidden>‹</button>
     <span class="fish">🐟</span>
     <span id="title">大肥鱼远控</span>
+    <button id="renameBtn" class="ghost" hidden>✏️</button>
+    <button id="modelBtn" class="ghost" hidden>模型</button>
     <span id="status">启动中…</span>
     <button id="reconnectBtn" hidden>重连</button>
     <button id="logToggleBtn" class="ghost">日志</button>
@@ -108,6 +127,27 @@
     <button id="sendBtn">发</button>
     <button id="stopBtn" class="ghost" title="中断本轮">停</button>
   </footer>
+
+  <div id="dlgWrap" hidden>
+    <div class="dlg">
+      <div class="dlgT" id="dlgTitle">会话名称</div>
+      <input id="dlgInput" maxlength="80" placeholder="输入会话名称">
+      <div class="btns" style="margin-top:10px">
+        <button id="dlgOk">确定</button>
+        <button id="dlgCancel" class="ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modelWrap" hidden>
+    <div class="sheet">
+      <div class="dlgT">模型<span class="sp"></span>
+        <button id="modelRefresh" class="ghost">刷新</button>
+        <button id="modelClose" class="ghost">关闭</button>
+      </div>
+      <div id="modelList"></div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

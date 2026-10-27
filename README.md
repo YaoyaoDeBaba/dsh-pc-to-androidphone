@@ -24,4 +24,30 @@
 app/src/main/java/.../MainActivity.java  # WebView 外壳
 app/src/main/assets/index.html            # 客户端界面
 app/src/main/assets/app.js                # 客户端逻辑（协议 + 加密）
+tools/patch-plugin.mjs                    # 电脑端插件补丁（改名 / 模型清单 / 切模型）
 ```
+
+## 电脑端插件补丁（改名、选模型、努力程度）
+
+官方的 `@dsh-remote/plugin`（0.5.1 / 0.5.3）协议里只有 10 条命令，**没有**改名、模型清单、切模型。
+这三项的底层能力 DSH 内核是有的，所以这里给插件打一个本地小补丁，补出三条命令：
+
+| 命令 | 作用 | 走的电脑端接口 |
+|---|---|---|
+| `cmd.rename_session` | 改会话名称 | `sessionController.commands.rename` |
+| `cmd.get_models` | 拿模型清单 + 每档努力程度 | `sessionController.modelCatalog()` |
+| `cmd.set_model` | 切模型 / 调努力程度 | `sessionController.commands.selectModel` |
+
+用法（在电脑上、仓库根目录）：
+
+```bash
+node tools/patch-plugin.mjs --check     # 看有没有打过
+node tools/patch-plugin.mjs             # 打补丁（已打过会跳过）
+node tools/patch-plugin.mjs --restore   # 还原备份
+```
+
+注意：
+
+- 补丁写在 `~/.dsh/profiles/desktop/node_modules/@dsh-remote/plugin` 里，**打完要重启 DSH 才生效**（会话历史不会丢）
+- **插件升级会覆盖补丁** → 升级后重跑一次 `node tools/patch-plugin.mjs` 即可
+- 第一次打补丁会在旁边留一份 `index.js.dsh-remote-plus.bak` 备份

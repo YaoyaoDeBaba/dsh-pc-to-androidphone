@@ -129,6 +129,20 @@ const S = {
   logOpen: false,      // 日志栏是否展开（默认收起；用户可随时切换并记住）
   lastSent: null,      // 最近一次发出的 prompt：{ text, at }，用于识别 host 的重复回显
   replaying: false,    // 正在回放历史（历史里的同文本消息不能按"重复"去重）
+  catalog: null,       // 电脑端返回的模型清单 { default, groups:[{id,name,models:[{id,name,efforts?,defaultEffort?}]}] }
+  modelOf: readModelMap(),   // 每个会话记一份「上次选的模型 + 努力程度」
+}
+
+/* 模型选择按会话记在本地：重启 App 也能显示上次选的 */
+function readModelMap() {
+  try {
+    const raw = localStorage.getItem('drc.models')
+    const obj = raw ? JSON.parse(raw) : null
+    return obj && typeof obj === 'object' ? obj : {}
+  } catch (_) { return {} }
+}
+function saveModelMap() {
+  try { localStorage.setItem('drc.models', JSON.stringify(S.modelOf)) } catch (_) {}
 }
 
 /* ================= DOM ================= */
@@ -137,7 +151,9 @@ const el = {}
 function initEls() {
   const ids = ['status', 'title', 'backBtn', 'pairView', 'listView', 'chatView', 'logCard',
     'pairCode', 'connectBtn', 'relayUrl', 'saveRelayBtn', 'sessions', 'refreshBtn', 'repairBtn', 'updateBtn',
-    'messages', 'msgInput', 'sendBtn', 'stopBtn', 'composer', 'log', 'clearLog', 'logToggleBtn', 'main', 'reconnectBtn']
+    'messages', 'msgInput', 'sendBtn', 'stopBtn', 'composer', 'log', 'clearLog', 'logToggleBtn', 'main', 'reconnectBtn',
+    'modelBtn', 'renameBtn', 'dlgWrap', 'dlgTitle', 'dlgInput', 'dlgOk', 'dlgCancel',
+    'modelWrap', 'modelList', 'modelRefresh', 'modelClose']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -241,6 +257,13 @@ function showView(name) {
   el.composer.hidden = name !== 'chat'
   el.backBtn.hidden = name !== 'chat'
   if (el.title) el.title.textContent = name === 'chat' ? (S.currentTitle || '对话') : '大肥鱼远控'
+  if (el.renameBtn) el.renameBtn.hidden = name !== 'chat'
+  if (el.modelBtn) {
+    el.modelBtn.hidden = name !== 'chat'
+    if (name === 'chat') el.modelBtn.textContent = modelBadgeText()
+  }
+  if (el.dlgWrap) el.dlgWrap.hidden = true
+  if (el.modelWrap) el.modelWrap.hidden = true
   if (name === 'chat' && el.main) el.main.scrollTop = el.main.scrollHeight
   if (el.reconnectBtn) el.reconnectBtn.hidden = !!S.paired
   if (el.logToggleBtn) el.logToggleBtn.textContent = S.logOpen ? '收起' : '日志'
@@ -297,6 +320,12 @@ function renderSessions() {
     const h = document.createElement('div')
     h.className = 'ws'
     h.textContent = workspaceLabel(ws) + '（' + items.length + '）'
+    const add = document.createElement('button')
+    add.className = 'wsAdd'
+    add.textContent = '＋ 新会话'
+    add.title = '在这个工作区里新建会话'
+    add.onclick = (e) => { e.stopPropagation(); cmdNewSession(ws) }
+    h.appendChild(add)
     el.sessions.appendChild(h)
 
     for (const s of items) {
@@ -477,6 +506,120 @@ function cmdListSessions() {
   sendSealed({ t: 'cmd.list_sessions', cmdId: nextCmdId() })
 }
 
+/* ================= 新建会话（指定工作区） ================= */
+function cmdNewSession(workspace) {
+  if (!S.kC2H) { log('还没配对'); return }
+  setStatus('新建会话…')
+  log('[新建会话] ' + (workspace || '默认工作区'))
+  sendSealed({ t: 'cmd.new_session', cmdId: nextCmdId(), ...(workspace ? { workspace } : {}) })
+}
+
+/* ================= 改会话名称 ================= */
+function openRenameDialog() {
+  if (!S.current || !el.dlgWrap) return
+  el.dlgTitle.textContent = '会话名称'
+  el.dlgInput.value = S.currentTitle || ''
+  el.dlgWrap.hidden = false
+  setTimeout(() => { try { el.dlgInput.focus(); el.dlgInput.select() } catch (_) {} }, 30)
+}
+function closeRenameDialog() {
+  if (el.dlgWrap) el.dlgWrap.hidden = true
+}
+function doRename() {
+  const title = (el.dlgInput?.value || '').trim()
+  if (!title || !S.current) { closeRenameDialog(); return }
+  closeRenameDialog()
+  setStatus('改名…')
+  log('[改名] ' + title)
+  sendSealed({ t: 'cmd.rename_session', cmdId: nextCmdId(), sessionId: S.current, title })
+}
+
+/* ================= 模型 / 努力程度 ================= */
+function modelBadgeText() {
+  const sel = S.current ? S.modelOf[S.current] : null
+  const name = sel?.model || ''
+  if (!name) return '模型'
+  return String(name).replace(/^.*\//, '')
+}
+function refreshModelBadge() {
+  if (el.modelBtn && S.view === 'chat') el.modelBtn.textContent = modelBadgeText()
+}
+function findModel(provider, model) {
+  const groups = S.catalog?.groups || []
+  const g = groups.find(x => x.id === provider)
+  return g?.models?.find(m => m.id === model)
+}
+function openModelSheet() {
+  if (!S.current || !el.modelWrap) return
+  el.modelWrap.hidden = false
+  if (!S.catalog) {
+    setStatus('取模型清单…')
+    log('[模型] 向电脑端要清单')
+    sendSealed({ t: 'cmd.get_models', cmdId: nextCmdId() })
+  } else {
+    renderModelSheet()
+  }
+}
+function closeModelSheet() {
+  if (el.modelWrap) el.modelWrap.hidden = true
+}
+function pickModel(provider, model, effort) {
+  if (!S.current) return
+  log('[模型] ' + provider + '/' + model + (effort ? ' · ' + effort : ''))
+  setStatus('切换模型…')
+  sendSealed({
+    t: 'cmd.set_model', cmdId: nextCmdId(), sessionId: S.current,
+    provider, model, ...(effort ? { reasoningEffort: effort } : {})
+  })
+}
+function renderModelSheet() {
+  if (!el.modelList) return
+  el.modelList.innerHTML = ''
+  const groups = S.catalog?.groups || []
+  if (!groups.length) {
+    const d = document.createElement('div')
+    d.className = 'muted'
+    d.textContent = S.catalog ? '这台电脑上没有可用模型' : '正在取模型清单…'
+    el.modelList.appendChild(d)
+    return
+  }
+  const sel = S.current ? S.modelOf[S.current] : null
+  for (const g of groups) {
+    const gh = document.createElement('div')
+    gh.className = 'mgroup'
+    gh.textContent = g.name || g.id
+    el.modelList.appendChild(gh)
+    for (const m of g.models || []) {
+      const on = sel && sel.provider === g.id && sel.model === m.id
+      const b = document.createElement('button')
+      b.className = 'mitem' + (on ? ' on' : '')
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = m.name || m.id
+      b.appendChild(n)
+      if (m.efforts?.length) {
+        const k = document.createElement('span'); k.className = 'k'; k.textContent = '可调档'
+        b.appendChild(k)
+      }
+      b.onclick = () => pickModel(g.id, m.id, m.defaultEffort || '')
+      el.modelList.appendChild(b)
+
+      // 当前模型才展开努力程度档位（省屏幕）
+      if (on && m.efforts?.length) {
+        const row = document.createElement('div')
+        row.className = 'eff'
+        const cur = sel.reasoningEffort || m.defaultEffort || ''
+        for (const effort of m.efforts) {
+          const eb = document.createElement('button')
+          eb.className = effort.id === cur ? 'on' : ''
+          eb.textContent = effort.name || effort.id
+          eb.onclick = () => pickModel(g.id, m.id, effort.id)
+          row.appendChild(eb)
+        }
+        el.modelList.appendChild(row)
+      }
+    }
+  }
+}
+
 function openSession(id, title) {
   S.current = id
   S.currentTitle = title || '对话'
@@ -488,6 +631,7 @@ function openSession(id, title) {
   showView('chat')
   renderMessages()
   renderSessions()
+  refreshModelBadge()
   sendSealed({ t: 'cmd.session_history', cmdId: nextCmdId(), sessionId: id, limit: 50 })
   sendSealed({ t: 'cmd.get_pending', cmdId: nextCmdId(), sessionId: id })
 }
@@ -535,7 +679,44 @@ function applyEvent(p) {
     return
   }
   if (t === 'ev.result') {
-    if (p.ok === false) log('[result] FAIL ' + (p.message || ''))
+    const d = p.data && typeof p.data === 'object' ? p.data : null
+    if (p.ok === false) {
+      log('[result] FAIL ' + (p.message || ''))
+      if (p.message) setStatus(String(p.message).slice(0, 40), '#e0a83a')
+    }
+    if (d) {
+      // 模型清单（cmd.get_models 的回执）
+      if (d.kind === 'catalog' && d.catalog) {
+        S.catalog = d.catalog
+        if (Array.isArray(d.failures) && d.failures.length) log('[模型] 部分 provider 取不到：' + d.failures.map(x => x.id).join(','))
+        renderModelSheet()
+        refreshModelBadge()
+      }
+      // 切模型成功
+      if (d.kind === 'model' && d.selected) {
+        if (d.sessionId) {
+          S.modelOf[d.sessionId] = { ...d.selected }
+          saveModelMap()
+        }
+        refreshModelBadge()
+        renderModelSheet()
+        setStatus('模型已切换', '#3ecf8e')
+        closeModelSheet()
+      }
+      // 改名成功
+      if (d.kind === 'title' && d.title) {
+        if (d.sessionId && d.sessionId === S.current) {
+          S.currentTitle = d.title
+          if (el.title) el.title.textContent = d.title
+        }
+        setStatus('已改名', '#3ecf8e')
+      }
+      // 新建会话成功 → 直接进去
+      if (d.sessionId && !d.kind) {
+        log('[新建会话] 已创建 ' + d.sessionId)
+        openSession(d.sessionId, '新会话')
+      }
+    }
     return
   }
 
@@ -939,6 +1120,23 @@ function boot() {
   el.sendBtn?.addEventListener('click', cmdSendPrompt)
   el.stopBtn?.addEventListener('click', cmdInterrupt)
   el.msgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cmdSendPrompt() })
+
+  // 改名
+  el.renameBtn?.addEventListener('click', openRenameDialog)
+  el.dlgOk?.addEventListener('click', doRename)
+  el.dlgCancel?.addEventListener('click', closeRenameDialog)
+  el.dlgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doRename() })
+  el.dlgWrap?.addEventListener('click', (e) => { if (e.target === el.dlgWrap) closeRenameDialog() })
+
+  // 模型 / 努力程度
+  el.modelBtn?.addEventListener('click', openModelSheet)
+  el.modelClose?.addEventListener('click', closeModelSheet)
+  el.modelWrap?.addEventListener('click', (e) => { if (e.target === el.modelWrap) closeModelSheet() })
+  el.modelRefresh?.addEventListener('click', () => {
+    S.catalog = null
+    sendSealed({ t: 'cmd.get_models', cmdId: nextCmdId() })
+    renderModelSheet()
+  })
   el.clearLog?.addEventListener('click', () => { logLines.length = 0; if (el.log) el.log.textContent = '' })
 
   // 日志栏：点「日志」展开，再点「收起」缩回；选择会被记住
