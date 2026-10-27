@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>UI 自测</title>
+<!--
+  手机端界面的无头自测：拿真实的 index.html + app.js，把 WebSocket 换成假的，
+  然后直接往 applyEvent() 里灌协议帧，看 DOM 有没有按预期变。
+  跑法见 tools/ui-test.ps1。
+-->
+<style>
+  body{background:#12121a;color:#ddd;font:13px monospace;padding:10px}
+  #head{display:flex;gap:6px;align-items:center}
+  #res div{padding:2px 0}
+  .ok{color:#3ecf8e}.bad{color:#ff6b6b}
+</style>
+</head>
+<body>
+<!-- 被测界面需要的骨架：直接从正式页面抄过来（id 必须一致） -->
+<div id="head">
+  <button id="backBtn" hidden>‹</button>
+  <span class="fish">🐟</span>
+  <span id="title">大肥鱼远控</span>
+  <button id="renameBtn" class="ghost" hidden>✏️</button>
+  <button id="modelBtn" class="ghost" hidden>模型</button>
+  <span id="status">测试中…</span>
+  <button id="reconnectBtn" hidden>重连</button>
+  <button id="logToggleBtn" class="ghost">日志</button>
+</div>
+
+<div id="pairView" hidden>
+  <input id="pairCode"><button id="connectBtn">连</button>
+  <input id="relayUrl"><button id="saveRelayBtn">存</button>
+</div>
+
+<div id="listView">
+  <div class="card"><h2>会话 <button id="refreshBtn">刷新</button><button id="updateBtn">更新</button><button id="repairBtn">重配</button></h2>
+    <div id="sessions"></div>
+  </div>
+</div>
+
+<div id="chatView" hidden>
+  <div class="card" id="messages"></div>
+  <footer id="composer" hidden>
+    <input id="msgInput"><button id="sendBtn">发</button><button id="stopBtn">停</button>
+  </footer>
+</div>
+
+<div class="card" id="logCard" hidden><button id="clearLog">清空</button><pre id="log"></pre></div>
+<div id="main"></div>
+
+<div id="dlgWrap" hidden>
+  <div class="dlg">
+    <div class="dlgT" id="dlgTitle">会话名称</div>
+    <input id="dlgInput" maxlength="80">
+    <div><button id="dlgOk">确定</button><button id="dlgCancel" class="ghost">取消</button></div>
+  </div>
+</div>
+
+<div id="modelWrap" hidden>
+  <div class="sheet">
+    <div class="dlgT">模型<span class="sp"></span><button id="modelRefresh" class="ghost">刷新</button><button id="modelClose" class="ghost">关闭</button></div>
+    <div id="modelList"></div>
+  </div>
+</div>
+
+<div id="res"></div>
+
+<script>
+  // ---- 假 WebSocket：客户端连不上不影响渲染逻辑 ----
+  window.WebSocket = class {
+    constructor() { this.readyState = 0; this.sent = [] }
+    send(x) { this.sent.push(x) }
+    close() { this.readyState = 3 }
+    addEventListener() {}
+    removeEventListener() {}
+  }
+  window.__WS_SENT = []
+  // ---- 假 localStorage：file:// 下访问真 localStorage 会抛 SecurityError，
+  //      而 app.js 顶部就用了它，所以必须在它之前换掉 ----
+  const mem = {}
+  try {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (k) => (k in mem ? mem[k] : null),
+        setItem: (k, v) => { mem[k] = String(v) },
+        removeItem: (k) => { delete mem[k] },
+      },
+    })
+  } catch (e) { document.title = 'FAIL storage-shim' }
+  const errs = []
+  window.addEventListener('error', (e) => { errs.push(String(e.message || e.error || 'err')) })
+</script>
+<script src="../app/src/main/assets/app.js" onerror="window.__loadFail = true"></script>
+<script>
+  const out = []
+  function check(name, cond, extra) {
+    out.push({ name, pass: !!cond, extra: extra || '' })
+  }
+  function dump() {
+    const res = document.getElementById('res')
+    for (const r of out) {
+      const d = document.createElement('div')
+      d.className = r.pass ? 'ok' : 'bad'
+      d.textContent = (r.pass ? 'PASS ' : 'FAIL ') + r.name + (r.extra ? '  [' + r.extra + ']' : '')
+      res.appendChild(d)
+    }
+  }
+  function textOf(id) { const e = document.getElementById(id); return e ? e.textContent : '' }
+
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      const D = window.__drc
+      if (!D) {
+        const res = document.getElementById('res')
+        const d = document.createElement('div')
+        d.className = 'bad'
+        d.textContent = 'FAIL no-hook  loadFail=' + String(window.__loadFail) + '  errs=' + JSON.stringify(errs).slice(0, 300)
+        res.appendChild(d)
+        document.title = 'FAIL no-hook'
+        return
+      }
+
+      // ---- 1. 会话列表：工作区 "＋ 新会话"、空的 fresh 会话不藏 ----
+      D.S.sessions = [
+        { id: 'a1', title: '会话A', workspace: 'D:\\proj\\alpha', state: 'idle' },
+        { id: 'a2', title: '会话B', workspace: 'D:\\proj\\alpha', state: 'running' },
+        { id: 'n1', title: '', workspace: 'D:\\proj\\beta' },
+      ]
+      D.S.fresh = { n1: true }
+      D.renderSessions()
+      const html = document.getElementById('sessions').innerHTML
+      check('列表有工作区', html.includes('alpha'))
+      check('工作区有 ＋ 新会话', html.includes('＋ 新会话'))
+      check('fresh 空会话保留并显示「新会话」', html.includes('新会话'))
+      const addBtns = document.querySelectorAll('.wsAdd')
+      check('每个工作区一个按钮', addBtns.length === 2, 'count=' + addBtns.length)
+
+      // ---- 2. 进会话：顶部出现改名/模型按钮 ----
+      D.openSession('a1', '会话A')
+      check('chat 视图显示改名按钮', !document.getElementById('renameBtn').hidden)
+      check('chat 视图显示模型按钮', !document.getElementById('modelBtn').hidden)
+      check('顶部标题=会话A', textOf('title') === '会话A', textOf('title'))
+
+      // ---- 3. 模型清单回执 → 面板渲染 ----
+      D.applyEvent({
+        t: 'ev.result', ok: true, cmdId: 'x',
+        data: {
+          kind: 'catalog',
+          catalog: {
+            groups: [{
+              id: 'deepseek', name: 'DeepSeek',
+              models: [
+                { id: 'deepseek-chat', name: 'Chat', efforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }], defaultEffort: 'low' },
+                { id: 'deepseek-reasoner', name: 'Reasoner' },
+              ]
+            }],
+            failures: []
+          }
+        }
+      })
+      const ml = document.getElementById('modelList').innerHTML
+      check('面板列出 provider', ml.includes('DeepSeek'))
+      check('面板列出模型', ml.includes('Chat') && ml.includes('Reasoner'))
+      check('有档位的模型标「可调档」', ml.includes('可调档'))
+
+      // ---- 4. 选模型回执 → 徽标 + 高亮 + 档位展开 ----
+      D.applyEvent({ t: 'ev.result', ok: true, cmdId: 'y', data: { kind: 'model', sessionId: 'a1', selected: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' } } })
+      check('模型徽标=deepseek-chat', textOf('modelBtn') === 'deepseek-chat', textOf('modelBtn'))
+      const ml2 = document.getElementById('modelList').innerHTML
+      check('选中项高亮', ml2.includes('mitem on'))
+      check('展开努力程度档位', ml2.includes('低') && ml2.includes('高'))
+      check('当前档位高亮', /class="on">高/.test(ml2))
+
+      // ---- 5. ev.model 广播 → 徽标跟着变（手机没选过时兜底） ----
+      D.S.modelOf = {}
+      D.applyEvent({ t: 'ev.model', sessionId: 'a1', model: 'deepseek-reasoner', provider: 'deepseek', canSwitch: false })
+      check('广播模型生效', textOf('modelBtn') === 'deepseek-reasoner', textOf('modelBtn'))
+
+      // ---- 6. 改名回执 → 顶部标题变 ----
+      D.applyEvent({ t: 'ev.result', ok: true, cmdId: 'z', data: { kind: 'title', sessionId: 'a1', title: '改好的名字' } })
+      check('改名后标题更新', textOf('title') === '改好的名字', textOf('title'))
+
+      // ---- 7. 新建会话回执 → 自动进入新会话 ----
+      D.applyEvent({ t: 'ev.result', ok: true, cmdId: 'w', data: { sessionId: 'new-1' } })
+      check('新建后进入新会话', D.S.current === 'new-1', D.S.current)
+      check('新会话标题=新会话', textOf('title') === '新会话', textOf('title'))
+      check('新会话进 fresh 白名单', D.S.fresh['new-1'] === true)
+
+      // ---- 8. 失败回执（补丁没生效）→ 给可操作提示 ----
+      D.S.cmdNames = { bad1: 'rename' }
+      D.applyEvent({ t: 'ev.result', ok: false, cmdId: 'bad1', message: '主机这一代不支持「cmd.rename_session」' })
+      check('失败提示可操作', textOf('status').includes('重启 DSH'), textOf('status'))
+
+      // ---- 9. 取清单失败 → 面板写明原因 ----
+      D.S.catalog = null
+      D.S.cmdNames = { bad2: 'models' }
+      D.applyEvent({ t: 'ev.result', ok: false, cmdId: 'bad2', message: '没有 modelCatalog' })
+      check('面板显示失败原因', document.getElementById('modelList').innerHTML.includes('取不到清单'), document.getElementById('modelList').textContent.trim())
+
+      dump()
+      const fails = out.filter(r => !r.pass).length
+      if (errs.length) {
+        const d = document.createElement('div')
+        d.className = 'bad'
+        d.textContent = 'JS-ERRORS: ' + errs.join(' | ').slice(0, 300)
+        document.getElementById('res').appendChild(d)
+      }
+      document.title = (fails || errs.length ? 'FAIL:' + (fails + errs.length) : 'PASS:' + out.length)
+    }, 60)
+  })
+</script>
+</body>
+</html>

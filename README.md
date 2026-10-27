@@ -51,3 +51,16 @@ node tools/patch-plugin.mjs --restore   # 还原备份
 - 补丁写在 `~/.dsh/profiles/desktop/node_modules/@dsh-remote/plugin` 里，**打完要重启 DSH 才生效**（会话历史不会丢）
 - **插件升级会覆盖补丁** → 升级后重跑一次 `node tools/patch-plugin.mjs` 即可
 - 第一次打补丁会在旁边留一份 `index.js.dsh-remote-plus.bak` 备份
+
+## 手机端界面自测（不用手机）
+
+改完界面先在本机跑一遍，省得装到手机上才发现问题：
+
+```bash
+npm run build
+pwsh -File tools/run-ui-test.ps1
+```
+
+它用无头 Edge/Chrome 打开 `tools/ui-test.html`，把「模型清单回执 / 改名回执 /
+新建会话回执 / ev.model 广播 / 失败回执」这些协议帧直接灌进 `app.js`，
+再检查 DOM 有没有按预期变化（当前 21 项）。
