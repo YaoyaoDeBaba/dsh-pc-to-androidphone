@@ -131,6 +131,7 @@ const S = {
   replaying: false,    // 正在回放历史（历史里的同文本消息不能按"重复"去重）
   catalog: null,       // 电脑端返回的模型清单 { default, groups:[{id,name,models:[{id,name,efforts?,defaultEffort?}]}] }
   modelOf: readModelMap(),   // 每个会话记一份「上次选的模型 + 努力程度」
+  hostModel: {},       // 电脑端 ev.model 广播来的真实模型名（用来显示；没选过时当兜底）
 }
 
 /* 模型选择按会话记在本地：重启 App 也能显示上次选的 */
@@ -535,8 +536,18 @@ function doRename() {
 }
 
 /* ================= 模型 / 努力程度 ================= */
+// 当前会话显示的模型：手机选过的优先，没选过就用电脑端广播的那个
+function effectiveModel() {
+  if (!S.current) return null
+  const picked = S.modelOf[S.current]
+  if (picked && picked.model) return picked
+  const host = S.hostModel[S.current]
+  if (host && host.model) return host
+  if (S.catalog?.default?.model) return S.catalog.default
+  return null
+}
 function modelBadgeText() {
-  const sel = S.current ? S.modelOf[S.current] : null
+  const sel = effectiveModel()
   const name = sel?.model || ''
   if (!name) return '模型'
   return String(name).replace(/^.*\//, '')
@@ -583,14 +594,14 @@ function renderModelSheet() {
     el.modelList.appendChild(d)
     return
   }
-  const sel = S.current ? S.modelOf[S.current] : null
+  const sel = effectiveModel()
   for (const g of groups) {
     const gh = document.createElement('div')
     gh.className = 'mgroup'
     gh.textContent = g.name || g.id
     el.modelList.appendChild(gh)
     for (const m of g.models || []) {
-      const on = sel && sel.provider === g.id && sel.model === m.id
+      const on = sel && sel.model === m.id && (!sel.provider || sel.provider === g.id)
       const b = document.createElement('button')
       b.className = 'mitem' + (on ? ' on' : '')
       const n = document.createElement('span'); n.className = 'n'; n.textContent = m.name || m.id
@@ -721,6 +732,18 @@ function applyEvent(p) {
   }
 
   const sid = p.sessionId
+
+  // 电脑端广播的当前模型：canSwitch 一直是 false（插件那一代不支持），但 model 名是真的
+  if (t === 'ev.model') {
+    if (sid && p.model) {
+      S.hostModel[sid] = { provider: p.provider || '', model: p.model }
+      if (S.current === sid) {
+        refreshModelBadge()
+        if (el.modelWrap && !el.modelWrap.hidden) renderModelSheet()
+      }
+    }
+    return
+  }
 
   // 运行态用 sessionId 维护徽标
   if (t === 'ev.run_state') {
