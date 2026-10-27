@@ -484,6 +484,7 @@ function openSession(id, title) {
   S.historyLoaded = false
   S.cards = {}
   S.qSel = {}
+  S.lastSent = null
   showView('chat')
   renderMessages()
   renderSessions()
@@ -496,6 +497,7 @@ function goBack() {
   S.currentTitle = ''
   S.msgs = []
   S.cards = {}
+  S.lastSent = null
   showView('list')
   renderSessions()
 }
@@ -505,7 +507,7 @@ function cmdSendPrompt() {
   if (!text || !S.current) return
   el.msgInput.value = ''
   S.lastSent = { text, at: Date.now() }
-  S.msgs.push({ id: 'me_' + Date.now(), role: 'user', text, pending: true, at: Date.now() })
+  S.msgs.push({ id: 'me_' + Date.now(), kind: 'msg', role: 'user', text, pending: true, at: Date.now() })
   renderMessages()
   sendSealed({ t: 'cmd.send_prompt', cmdId: nextCmdId(), sessionId: S.current, text })
 }
@@ -561,28 +563,35 @@ function applyEvent(p) {
       const mid = p.messageId || ('m_' + Date.now())
       const text = typeof p.delta === 'string' ? p.delta : ''
 
-      // —— 用户消息：host 会把同一条发两遍（排队消息先走 agent/inbox/spliced，
-      //    进正史后 user/message 再发一次；两帧可能同 messageId 也可能不同），
-      //    这里按"同一条消息只留一个气泡、文本不叠加"处理 ——
+      // —— 用户消息：host 对同一条消息可能发两帧（排队消息先走 agent/inbox/spliced，
+      //    进正史后 user/message 再发一次；两帧的 messageId 可能相同也可能不同，
+      //    时间间隔可达数分钟）——同一条消息只允许一个气泡、文本绝不叠加 ——
       if (p.role === 'user') {
-        // 1) 同 messageId 的气泡（第二帧会和第一帧撞上）
+        // a) 同 messageId 的气泡
         let m = S.msgs.find(x => x.kind !== 'tool' && x.id === mid)
-        // 2) 不同 messageId 但我刚发出去的同一句话（15 秒窗口内；历史回放不参与）
-        if (!m && text && !S.replaying && S.lastSent && S.lastSent.text === text
-            && Date.now() - S.lastSent.at < 15000) {
-          m = S.msgs.find(x => x.kind === 'msg' && x.role === 'user' && x.text === text)
+        // b) 本机刚发出的那条：优先认领乐观气泡（它就是"这条消息"）
+        if (!m && !S.replaying && text && S.lastSent && S.lastSent.text === text) {
+          const pend = S.msgs.find(x => x.pending && x.text === text)
+          if (pend) {
+            pend.id = mid
+            pend.pending = false
+            pend.at = Date.now()
+            m = pend
+          }
         }
-        // 3) 本机乐观插入的那条：已经有真气泡就删掉，没有就转正（不重开一个）
-        const pend = S.msgs.find(x => x.pending && x.text === text)
-        if (pend) {
-          if (m && m !== pend) S.msgs.splice(S.msgs.indexOf(pend), 1)
-          else if (!m) { pend.pending = false; pend.at = Date.now(); m = pend }
+        // c) 同一句话最近已经渲染过（重复回显的第二帧 / 迟到的 inbox 帧）
+        if (!m && !S.replaying && text && S.lastSent && S.lastSent.text === text) {
+          const dup = S.msgs.find(x => x.kind === 'msg' && x.role === 'user' && !x.pending && x.text === text)
+          if (dup) {
+            dup.id = mid
+            m = dup
+            log('[去重] 同文本用户消息只保留一个气泡')
+          }
         }
         if (!m) {
           m = { id: mid, kind: 'msg', role: 'user', text, at: Date.now() }
           S.msgs.push(m)
         } else if (text && m.text !== text && text.startsWith(m.text)) {
-          // 累计式重发（"abc"→"abcd"）：替换；否则保留原文本，绝不叠加
           m.text = text
         }
         if (p.done) m.done = true
