@@ -142,7 +142,7 @@ public final class UpdateManager {
 
     private static void handleResult(Activity a, DownloadManager dm, long id, String url, int attempt) {
         try {
-            int status = DownloadManager.STATUS_UNKNOWN;
+            int status = 0;
             DownloadManager.Query q = new DownloadManager.Query().setFilterById(id);
             try (Cursor c = dm.query(q)) {
                 if (c != null && c.moveToFirst()) {
