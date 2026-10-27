@@ -28,6 +28,13 @@ public class MainActivity extends Activity {
         UpdateManager.check(this);
     }
 
+    /** 把字符串安全地嵌进 JS 单引号字符串里。 */
+    private static String jsStr(String s) {
+        if (s == null) s = "";
+        return s.replace("\\", "\\\\").replace("'", "\\'")
+                .replace("\n", "\\n").replace("\r", "");
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,13 +70,32 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
         }
 
-        // 页面上的「更新」按钮走这里
+        // 页面上的「更新」按钮走这里；updateLog 把更新过程推给页面日志栏
+        // （注意：JS 注入的方法名不能以 on 开头，WebView 会屏蔽）
         webView.addJavascriptInterface(new Object() {
             @android.webkit.JavascriptInterface
             public void checkUpdate() {
                 runOnUiThread(() -> UpdateManager.check(MainActivity.this));
             }
+
+            @android.webkit.JavascriptInterface
+            public void updateLog(String msg) {
+                try {
+                    webView.evaluateJavascript(
+                            "window.__onUpdateLog && window.__onUpdateLog('" + jsStr(msg) + "')", null);
+                } catch (Exception ignored) {
+                }
+            }
         }, "dshApp");
+
+        // 原生更新流程的每一步，也同步进页面日志栏，方便排查
+        UpdateManager.setListener(msg -> runOnUiThread(() -> {
+            try {
+                webView.evaluateJavascript(
+                        "window.__onUpdateLog && window.__onUpdateLog('" + jsStr(msg) + "')", null);
+            } catch (Exception ignored) {
+            }
+        }));
 
         // 启动时静默查一次有没有新版本
         checkUpdateIfStale();

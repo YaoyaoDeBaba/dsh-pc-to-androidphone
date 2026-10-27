@@ -860,6 +860,12 @@ function tryFinishPairing() {
 }
 
 /* ================= 启动 ================= */
+// 原生更新流程的每一步会推到这里：写进日志栏，并让状态栏实时可见
+window.__onUpdateLog = (s) => {
+  log('[更新] ' + s)
+  setStatus('更新: ' + s, '#e0a83a')
+}
+
 function boot() {
   initEls()
 

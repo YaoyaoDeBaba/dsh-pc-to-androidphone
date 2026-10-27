@@ -23,8 +23,9 @@ import java.net.URL;
  * 自更新：查最新 Release -> 版本更高就问用户 -> 自己用 HTTP 下载 -> 拉起安装器。
  *
  * 为什么不用系统 DownloadManager：小米 MIUI 把系统下载引擎换成了「迅雷下载」，
- * 请求进去后经常 0 速度卡死、既不完成也不失败，App 根本收不到结果，重试和兜底都无从谈起。
- * 这里改成自己下载：超时/0 字节判死、自动重试 4 次、失败自动跳浏览器（浏览器网络更耐造）。
+ * 请求进去后经常 0 速度卡死、既不完成也不失败，App 根本收不到结果。
+ * 这里改成自己下载：超时/0 字节判死、自动重试 4 次、失败直接开浏览器下 APK 兜底。
+ * 下载全程用弹窗 + 页面日志栏实时反馈，不再“静默失败”。
  * 安装走自家 ApkProvider 的 content:// URI，保持零第三方依赖。
  */
 public final class UpdateManager {
@@ -33,8 +34,6 @@ public final class UpdateManager {
     private static final String REPO = "dsh-pc-to-androidphone";
     private static final String API =
             "https://api.github.com/repos/" + OWNER + "/" + REPO + "/releases/latest";
-    private static final String RELEASES_PAGE =
-            "https://github.com/" + OWNER + "/" + REPO + "/releases/latest";
 
     /** 下载失败自动重试次数上限（每次间隔 3 秒）。 */
     private static final int MAX_DOWNLOAD_ATTEMPTS = 4;
@@ -44,8 +43,26 @@ public final class UpdateManager {
 
     /** 防止连点「下载更新」导致两个线程同时写文件。 */
     private static volatile boolean downloading = false;
+    /** 下载进度弹窗（全程可见，不再静默失败）。 */
+    private static volatile AlertDialog progressDlg = null;
+
+    /** 更新流程的每一步都会推给页面日志栏（MainActivity 接）。 */
+    public interface Listener {
+        void log(String msg);
+    }
+
+    private static volatile Listener listener;
+
+    public static void setListener(Listener l) {
+        listener = l;
+    }
 
     private UpdateManager() {
+    }
+
+    private static void log(String msg) {
+        Listener l = listener;
+        if (l != null) l.log(msg);
     }
 
     /** 后台查一次更新；有新版本就在主线程弹框。失败静默。 */
@@ -112,51 +129,62 @@ public final class UpdateManager {
                 .setTitle("发现新版本")
                 .setMessage("build-" + ver + " 已经编译好了，现在下载安装？\n（会覆盖当前版本，配对信息保留）")
                 .setPositiveButton("下载更新", (d, w) -> startDownload(a, url, 1))
-                .setNeutralButton("浏览器下载", (d, w) -> openInBrowser(a, RELEASES_PAGE))
+                .setNeutralButton("浏览器下载", (d, w) -> openInBrowser(a, url))
                 .setNegativeButton("稍后", null)
                 .show();
     }
 
-    /** 自建 HTTP 下载（绕开小米迅雷引擎），失败自动重试，最后跳浏览器兜底。 */
+    /** 自建 HTTP 下载（绕开小米迅雷引擎），失败自动重试，最后开浏览器直接下 APK 兜底。 */
     private static void startDownload(final Activity a, final String url, final int attempt) {
         if (downloading) return;
         downloading = true;
         new Thread(() -> {
             boolean ok = false;
+            String failReason = "未知错误";
             try {
                 File dir = a.getExternalFilesDir(null);
-                if (dir == null) {
-                    toast(a, "无法创建下载目录");
-                    return;
-                }
+                if (dir == null) throw new Exception("无法创建下载目录");
                 File out = new File(dir, "update.apk");
-                toast(a, "开始下载（第 " + attempt + " 次尝试）…");
-                long bytes = httpDownload(url, out, a);
+                showProgress(a, "正在下载（第 " + attempt + "/" + MAX_DOWNLOAD_ATTEMPTS + " 次尝试）…");
+                log("开始下载: " + url);
+                long bytes = httpDownload(url, out);
                 if (bytes > 0) {
                     ok = true;
+                    log("下载完成: " + bytes + " 字节");
+                    hideProgress(a);
                     toast(a, "下载完成（" + bytes / 1024 + " KB），正在安装…");
                     install(a, out);
+                } else {
+                    throw new Exception("0 字节");
                 }
             } catch (Exception e) {
-                // 下载异常/超时/0 字节，走下面的重试
+                failReason = (e.getMessage() == null) ? "下载异常" : e.getMessage();
+                log("下载失败: " + failReason);
             } finally {
                 downloading = false;
             }
 
             if (ok) return;
+
             if (attempt < MAX_DOWNLOAD_ATTEMPTS) {
-                toast(a, "下载失败，自动重试（" + attempt + "/" + MAX_DOWNLOAD_ATTEMPTS + "）…");
+                showProgress(a, "下载失败（" + failReason + "），3 秒后自动重试\n第 " + (attempt + 1) + "/" + MAX_DOWNLOAD_ATTEMPTS + " 次…");
                 sleep(3000);
-                if (!a.isFinishing()) startDownload(a, url, attempt + 1);
+                if (a.isFinishing()) {
+                    hideProgress(a);
+                    return;
+                }
+                startDownload(a, url, attempt + 1);
             } else {
-                toast(a, "自动下载失败，已打开浏览器，点 app-debug.apk 下载");
-                openInBrowser(a, RELEASES_PAGE);
+                hideProgress(a);
+                toast(a, "自动下载 4 次都失败，已打开浏览器直接下载 APK");
+                log("自动下载失败，打开浏览器: " + url);
+                openInBrowser(a, url);
             }
         }).start();
     }
 
     /** 手动跟随重定向 + 超时流式下载到 out；返回下载字节数，异常/0 字节会抛错。 */
-    private static long httpDownload(String url, File out, Activity a) throws Exception {
+    private static long httpDownload(String url, File out) throws Exception {
         String current = url;
         for (int hop = 0; hop < 6; hop++) {
             HttpURLConnection c = (HttpURLConnection) new URL(current).openConnection();
@@ -190,9 +218,13 @@ public final class UpdateManager {
                     got += n;
                 }
             } finally {
-                try { in.close(); } catch (Exception ignored) {
+                try {
+                    in.close();
+                } catch (Exception ignored) {
                 }
-                try { fos.close(); } catch (Exception ignored) {
+                try {
+                    fos.close();
+                } catch (Exception ignored) {
                 }
                 c.disconnect();
             }
@@ -201,6 +233,33 @@ public final class UpdateManager {
             return got;
         }
         throw new Exception("重定向太多");
+    }
+
+    private static void showProgress(Activity a, String msg) {
+        a.runOnUiThread(() -> {
+            if (a.isFinishing()) return;
+            try {
+                if (progressDlg == null) {
+                    progressDlg = new AlertDialog.Builder(a)
+                            .setTitle("下载更新")
+                            .setCancelable(true)
+                            .create();
+                }
+                progressDlg.setMessage(msg);
+                if (!progressDlg.isShowing()) progressDlg.show();
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    private static void hideProgress(Activity a) {
+        a.runOnUiThread(() -> {
+            try {
+                if (progressDlg != null && progressDlg.isShowing()) progressDlg.dismiss();
+                progressDlg = null;
+            } catch (Exception ignored) {
+            }
+        });
     }
 
     private static void install(Activity a, File apk) {
