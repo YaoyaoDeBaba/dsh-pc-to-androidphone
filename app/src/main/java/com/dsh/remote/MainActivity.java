@@ -97,7 +97,8 @@ public class MainActivity extends Activity {
             }
         }));
 
-        // 启动时静默查一次有没有新版本
+        // 启动时静默查一次有没有新版本；顺便清理 24 小时前的旧更新包
+        UpdateManager.cleanupStale(this);
         checkUpdateIfStale();
     }
 

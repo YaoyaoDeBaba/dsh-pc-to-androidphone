@@ -45,6 +45,9 @@ public final class UpdateManager {
     private static volatile boolean downloading = false;
     /** 下载进度弹窗（全程可见，不再静默失败）。 */
     private static volatile AlertDialog progressDlg = null;
+    /** 进度节流：最多每 400ms 刷一次 UI。 */
+    private static volatile int lastPct = -1;
+    private static volatile long lastPctAt = 0;
 
     /** 更新流程的每一步都会推给页面日志栏（MainActivity 接）。 */
     public interface Listener {
@@ -145,9 +148,10 @@ public final class UpdateManager {
                 File dir = a.getExternalFilesDir(null);
                 if (dir == null) throw new Exception("无法创建下载目录");
                 File out = new File(dir, "update.apk");
+                if (out.exists()) out.delete(); // 每次下载前清掉旧包，避免残留垃圾
                 showProgress(a, "正在下载（第 " + attempt + "/" + MAX_DOWNLOAD_ATTEMPTS + " 次尝试）…");
                 log("开始下载: " + url);
-                long bytes = httpDownload(url, out);
+                long bytes = httpDownload(url, out, a, attempt);
                 if (bytes > 0) {
                     ok = true;
                     log("下载完成: " + bytes + " 字节");
@@ -184,7 +188,7 @@ public final class UpdateManager {
     }
 
     /** 手动跟随重定向 + 超时流式下载到 out；返回下载字节数，异常/0 字节会抛错。 */
-    private static long httpDownload(String url, File out) throws Exception {
+    private static long httpDownload(String url, File out, Activity a, int attempt) throws Exception {
         String current = url;
         for (int hop = 0; hop < 6; hop++) {
             HttpURLConnection c = (HttpURLConnection) new URL(current).openConnection();
@@ -212,10 +216,18 @@ public final class UpdateManager {
             byte[] buf = new byte[8192];
             long got = 0;
             int n;
+            int lastShown = -1000;
             try {
                 while ((n = in.read(buf)) != -1) {
                     fos.write(buf, 0, n);
                     got += n;
+                    if (total > 0) {
+                        int pct = (int) (got * 100 / total);
+                        if (pct != lastShown) {
+                            lastShown = pct;
+                            showPct(a, pct, attempt);
+                        }
+                    }
                 }
             } finally {
                 try {
@@ -233,6 +245,30 @@ public final class UpdateManager {
             return got;
         }
         throw new Exception("重定向太多");
+    }
+
+    /** 进度节流刷新：弹窗里显示百分比，日志里每 25% 记一条。 */
+    private static void showPct(Activity a, int pct, int attempt) {
+        long now = System.currentTimeMillis();
+        if (now - lastPctAt < 400) return; // 最多每 400ms 刷一次，避免刷爆 UI
+        if (pct == lastPct) return;
+        lastPct = pct;
+        lastPctAt = now;
+        showProgress(a, "正在下载 " + pct + "%（第 " + attempt + "/" + MAX_DOWNLOAD_ATTEMPTS + " 次尝试）");
+        if (pct % 25 == 0) log("下载进度 " + pct + "%");
+    }
+
+    /** 启动时清理超过 24 小时的旧更新包，避免一直占空间。 */
+    public static void cleanupStale(Activity a) {
+        try {
+            File dir = a.getExternalFilesDir(null);
+            if (dir == null) return;
+            File f = new File(dir, "update.apk");
+            if (f.exists() && System.currentTimeMillis() - f.lastModified() > 24L * 3600 * 1000) {
+                if (f.delete()) log("已清理旧的更新包（超过 24 小时）");
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private static void showProgress(Activity a, String msg) {
