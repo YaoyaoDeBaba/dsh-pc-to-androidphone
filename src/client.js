@@ -135,6 +135,8 @@ const S = {
   fresh: {},           // 刚在手机上新建、还没标题的会话（列表里别藏起来）
   cmdNames: {},        // cmdId → 'rename' | 'models' | 'set_model'（失败时给提示用）
   modelErr: '',        // 取模型清单失败的原因
+  newBusy: false,      // 正在新建会话（防连点）
+  newBusyTimer: null,
 }
 
 /* 模型选择按会话记在本地：重启 App 也能显示上次选的 */
@@ -215,6 +217,27 @@ function clearSession() {
   localStorage.removeItem('drc.psk')
   localStorage.removeItem('drc.conv')
   localStorage.removeItem('drc.seq')
+  localStorage.removeItem('drc.open')
+}
+
+// 记住当前打开的会话：WebView 被系统杀掉重载、或者 App 被清后台后重进，
+// 都还能回到原来那条会话，而不是被扔回列表
+function saveOpenSession(id, title) {
+  try {
+    if (!id) { localStorage.removeItem('drc.open'); return }
+    localStorage.setItem('drc.open', JSON.stringify({ id, title: title || '' }))
+  } catch (_) {}
+}
+function loadOpenSession() {
+  try {
+    const raw = localStorage.getItem('drc.open')
+    if (!raw) return null
+    const obj = JSON.parse(raw)
+    return obj && typeof obj.id === 'string' && obj.id ? obj : null
+  } catch (_) { return null }
+}
+function clearOpenSession() {
+  try { localStorage.removeItem('drc.open') } catch (_) {}
 }
 
 function stopPing() {
@@ -332,7 +355,8 @@ function renderSessions() {
     h.textContent = workspaceLabel(ws) + '（' + items.length + '）'
     const add = document.createElement('button')
     add.className = 'wsAdd'
-    add.textContent = '＋ 新会话'
+    add.textContent = S.newBusy ? '建中…' : '＋ 新会话'
+    add.disabled = S.newBusy
     add.title = '在这个工作区里新建会话'
     add.onclick = (e) => { e.stopPropagation(); cmdNewSession(ws) }
     h.appendChild(add)
@@ -526,11 +550,51 @@ function cmdListSessions() {
 }
 
 /* ================= 新建会话（指定工作区） ================= */
+// 同工作区里已经有一个空的（没标题、没在跑）会话时，直接进去，别再建新的 ——
+// 否则连点几次 ＋ 就会在列表里堆一堆「新会话」
+function findEmptySession(ws) {
+  const key = ws || ''
+  for (const raw of S.sessions) {
+    const s = raw && raw.session ? raw.session : raw
+    if (!s) continue
+    if ((s.workspace || '') !== key) continue
+    const id = s.id || s.sessionId || ''
+    if (!id) continue
+    if (typeof s.title === 'string' && s.title.trim()) continue
+    if (S.running[id]) continue
+    if (s.blank === false) continue
+    return id
+  }
+  return null
+}
 function cmdNewSession(workspace) {
   if (!S.kC2H) { log('还没配对'); return }
-  setStatus('新建会话…')
+  if (S.newBusy) { setStatus('正在新建，稍等…', '#e0a83a'); return }
+  const reuse = findEmptySession(workspace)
+  if (reuse) {
+    log('[新建会话] 已有空会话，直接进 ' + reuse)
+    S.fresh[reuse] = true
+    openSession(reuse, '新会话')
+    return
+  }
+  S.newBusy = true
+  setStatus('新建会话…', '#5b8cff')
   log('[新建会话] ' + (workspace || '默认工作区'))
-  sendSealed({ t: 'cmd.new_session', cmdId: nextCmdId(), ...(workspace ? { workspace } : {}) })
+  renderSessions()   // 立刻把按钮改成「建中…」，别让人以为没点上
+  sendSealed({ t: 'cmd.new_session', cmdId: nextCmdIdFor('new_session'), ...(workspace ? { workspace } : {}) })
+  clearTimeout(S.newBusyTimer)
+  S.newBusyTimer = setTimeout(() => {
+    if (!S.newBusy) return
+    S.newBusy = false
+    renderSessions()
+    setStatus('新建超时，稍后再试', '#e0a83a')
+  }, 20000)
+}
+function clearNewBusy() {
+  if (!S.newBusy) return
+  S.newBusy = false
+  clearTimeout(S.newBusyTimer)
+  renderSessions()
 }
 
 /* ================= 改会话名称 ================= */
@@ -664,6 +728,7 @@ function openSession(id, title) {
   renderMessages()
   renderSessions()
   refreshModelBadge()
+  saveOpenSession(id, title || '')
   sendSealed({ t: 'cmd.session_history', cmdId: nextCmdId(), sessionId: id, limit: 50 })
   sendSealed({ t: 'cmd.get_pending', cmdId: nextCmdId(), sessionId: id })
 }
@@ -674,6 +739,7 @@ function goBack() {
   S.msgs = []
   S.cards = {}
   S.lastSent = null
+  clearOpenSession()
   showView('list')
   renderSessions()
 }
@@ -720,6 +786,7 @@ function applyEvent(p) {
         S.modelErr = p.message || '取不到模型清单'
         renderModelSheet()
       }
+      if (wanted === 'new_session') clearNewBusy()
       setStatus(wanted ? '失败：重启 DSH 再试' : String(p.message || '失败了').slice(0, 34), '#e0a83a')
     }
     if (d) {
@@ -747,12 +814,14 @@ function applyEvent(p) {
         if (d.sessionId && d.sessionId === S.current) {
           S.currentTitle = d.title
           if (el.title) el.title.textContent = d.title
+          saveOpenSession(S.current, d.title)
         }
         setStatus('已改名', '#3ecf8e')
       }
       // 新建会话成功 → 直接进去
       if (d.sessionId && !d.kind) {
         log('[新建会话] 已创建 ' + d.sessionId)
+        clearNewBusy()
         S.fresh[d.sessionId] = true
         openSession(d.sessionId, '新会话')
       }
@@ -988,12 +1057,33 @@ function handleFrame(f) {
         S.gotData = false
         startPing()
         setStatus('重连中…', '#5b8cff')
-        S.current = null
-        S.msgs = []
-        S.cards = {}
-        showView('list')
-        renderSessions()
-        cmdListSessions()
+        if (S.current) {
+          // 断线重连时**不要**把人踢回列表：原来这里把 current 清空 + showView('list')，
+          // 于是手机放一会儿、网络抖一下、主机重启一次，用户就莫名"闪退"回会话列表。
+          // 现在留在原会话里：重拉一遍历史和未决交互，页面不跳。
+          log('重连：留在当前会话 ' + S.current)
+          S.historyLoaded = false
+          S.lastSent = null
+          S.replaying = false
+          showView('chat')
+          renderMessages()
+          sendSealed({ t: 'cmd.session_history', cmdId: nextCmdId(), sessionId: S.current, limit: 50 })
+          sendSealed({ t: 'cmd.get_pending', cmdId: nextCmdId(), sessionId: S.current })
+          cmdListSessions()
+        } else {
+          // 页面重载/App 重进：上次开着会话就回到那条，别一进来就是列表
+          const saved = loadOpenSession()
+          if (saved) {
+            log('恢复上次打开的会话 ' + saved.id)
+            openSession(saved.id, saved.title || '对话')
+          } else {
+            S.msgs = []
+            S.cards = {}
+            showView('list')
+            renderSessions()
+          }
+          cmdListSessions()
+        }
         // 5 秒看门狗：重连后没有任何数据，提示一下（不销毁会话，避免误判）
         setTimeout(() => {
           if (!S.gotData && S.mode === 'resume') {
@@ -1249,5 +1339,5 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, renderSessions, renderModelSheet, showView, openSession, effectiveModel, modelBadgeText }
+  globalThis.__drc = { S, el, applyEvent, renderSessions, renderModelSheet, showView, openSession, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession }
 } catch (_) {}

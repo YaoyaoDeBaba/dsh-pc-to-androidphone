@@ -25,6 +25,7 @@
   <button id="modelBtn" class="ghost" hidden>模型</button>
   <span id="status">测试中…</span>
   <button id="reconnectBtn" hidden>重连</button>
+  <button id="updateBtn" class="ghost" title="检查更新">更新</button>
   <button id="logToggleBtn" class="ghost">日志</button>
 </div>
 
@@ -198,6 +199,41 @@
       D.S.cmdNames = { bad2: 'models' }
       D.applyEvent({ t: 'ev.result', ok: false, cmdId: 'bad2', message: '没有 modelCatalog' })
       check('面板显示失败原因', document.getElementById('modelList').innerHTML.includes('取不到清单'), document.getElementById('modelList').textContent.trim())
+
+      // ---- 10. 新建会话：正在建的时候按钮变「建中…」且不能点 ----
+      D.S.newBusy = true
+      D.renderSessions()
+      const busyBtn = document.querySelector('.wsAdd')
+      check('建中按钮文案', busyBtn && busyBtn.textContent === '建中…', busyBtn && busyBtn.textContent)
+      check('建中按钮禁用', busyBtn && busyBtn.disabled === true, String(busyBtn && busyBtn.disabled))
+      D.S.newBusy = false
+
+      // ---- 11. 新建会话：同工作区已有空会话就进去，不重复建 ----
+      D.S.sessions = [
+        { id: 'e1', title: '', workspace: 'D:\\proj\\gamma' },
+        { id: 't1', title: '有标题的', workspace: 'D:\\proj\\gamma' },
+      ]
+      D.S.fresh = { e1: true }
+      D.S.current = null
+      D.S.msgs = []
+      D.renderSessions()
+      check('找到同工作区空会话', D.findEmptySession('D:\\proj\\gamma') === 'e1', String(D.findEmptySession('D:\\proj\\gamma')))
+      check('有标题的不算空会话', D.findEmptySession('D:\\proj\\gamma') !== 't1')
+      const btns2 = document.querySelectorAll('.wsAdd')
+      // 让 cmdNewSession 过掉「没配对」守卫；openSession 会发两条帧，所以把加密和 socket 也备好
+      D.S.kC2H = new Uint8Array(32)
+      D.S.noncePre = new Uint8Array(16)
+      D.S.outSeq = 1
+      D.S.ws = { readyState: 1, send: (x) => window.__WS_SENT.push(x), close() {} }
+      btns2[btns2.length - 1].click()
+      check('点＋直接进空会话', D.S.current === 'e1', String(D.S.current))
+      check('没有进入新建等待态', D.S.newBusy === false, String(D.S.newBusy))
+
+      // ---- 12. 顶部按钮：更新在日志左边（需求：搬到日志旁边） ----
+      const headerBtns = [...document.querySelectorAll('#head button')].map(b => b.id)
+      const ui = headerBtns.indexOf('updateBtn'), li = headerBtns.indexOf('logToggleBtn')
+      check('更新按钮在顶部', ui >= 0, headerBtns.join(','))
+      check('更新紧挨日志左侧', ui >= 0 && li >= 0 && ui === li - 1, headerBtns.join(','))
 
       dump()
       const fails = out.filter(r => !r.pass).length
