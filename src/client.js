@@ -1352,5 +1352,5 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, renderSessions, renderModelSheet, showView, openSession, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession }
+  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession }
 } catch (_) {}

@@ -244,9 +244,39 @@
       ]
       D.S.fresh = { k1: true, k2: true, k3: true }
       D.renderSessions()
-      const rows = [...document.querySelectorAll('#sessions .row, #sessions .sitem, #sessions [data-id]')]
       const shown = [...document.querySelectorAll('#sessions *')].filter(e => e.textContent === '新会话').length
       check('三个空会话只显示一条', shown === 1, 'shown=' + shown)
+
+      // ---- 14. 断线重连：开着的会话不能被踢回列表（原来是 showView('list')） ----
+      D.S.sessions = [{ id: 'a1', title: '会话A', workspace: 'D:\\proj\\alpha' }]
+      D.S.current = 'a1'
+      D.S.currentTitle = '会话A'
+      D.S.mode = 'resume'
+      D.S.pskBytes = new Uint8Array(32).fill(7)
+      D.S.convId = 'conv-test'
+      D.S.clientId = 'cl-test'
+      D.S.ws = { readyState: 1, send: (x) => window.__WS_SENT.push(x), close() {} }
+      window.__WS_SENT = []
+      D.showView('chat')
+      D.handleFrame({ t: 'hello-ok' })
+      check('重连后仍在会话页', document.getElementById('chatView').hidden === false)
+      check('重连保留当前会话', D.S.current === 'a1', String(D.S.current))
+      check('重连补拉历史+未决', window.__WS_SENT.length >= 2, 'sent=' + window.__WS_SENT.length)
+
+      // ---- 15. 页面重载/App 重进：恢复到上次开着的会话 ----
+      D.S.current = null
+      D.S.mode = 'resume'
+      D.S.historyLoaded = false
+      localStorage.setItem('drc.open', JSON.stringify({ id: 'a1', title: '会话A' }))
+      D.showView('list')
+      window.__WS_SENT = []
+      D.handleFrame({ t: 'hello-ok' })
+      check('重载后回到原会话', D.S.current === 'a1', String(D.S.current))
+      check('重载后是会话页', document.getElementById('chatView').hidden === false)
+
+      // ---- 16. 从会话返回列表：要清掉"上次打开"的记忆 ----
+      D.goBack()
+      check('返回列表清掉记忆', localStorage.getItem('drc.open') === null, String(localStorage.getItem('drc.open')))
 
       dump()
       const fails = out.filter(r => !r.pass).length

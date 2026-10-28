@@ -43,7 +43,7 @@ $title = ''
 if ($raw -match '<title>(.*?)</title>') { $title = $matches[1]; Write-Host ("title=" + $title) }
 # 页面标题是权威判据：任何 JS 异常也会让它变成 FAIL:n
 if ($title -like 'FAIL*') { $fails = [Math]::Max($fails, 1) }
-if ($raw -match 'JS-ERRORS: ([^<]{0,300})') { Write-Host ('JS 异常：' + $matches[1]) }
+if ($seg -match 'class="bad">JS-ERRORS: ([^<]{0,300})') { Write-Host ('JS 异常：' + $matches[1]) }
 
 # 静态检查：正式页面 index.html 的按钮摆位（自测页只是骨架，管不了正式页）
 $html = Get-Content (Join-Path $repo 'app/src/main/assets/index.html') -Raw
