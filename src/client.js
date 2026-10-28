@@ -332,6 +332,19 @@ function renderSessions() {
       const titled = typeof s.title === 'string' && s.title.trim().length > 0
       return titled || S.fresh[id] || id === S.current
     })
+    // 同一个工作区只留一个空会话：连点 ＋ 留下的那一堆别再显示（数据还在，只是不占屏）
+    .filter((s, i, arr) => {
+      const id = s.id || s.sessionId || s.convId || ''
+      const titled = typeof s.title === 'string' && s.title.trim().length > 0
+      if (titled) return true
+      if (id === S.current) return true
+      const firstEmpty = arr.find(x => {
+        const xt = typeof x.title === 'string' && x.title.trim().length > 0
+        return !xt && (x.workspace || '') === (s.workspace || '')
+      })
+      const firstId = firstEmpty ? (firstEmpty.id || firstEmpty.sessionId || firstEmpty.convId || '') : ''
+      return firstId === id
+    })
 
   if (!list.length) {
     const d = document.createElement('div')

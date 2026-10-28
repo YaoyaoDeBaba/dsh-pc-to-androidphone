@@ -235,6 +235,19 @@
       check('更新按钮在顶部', ui >= 0, headerBtns.join(','))
       check('更新紧挨日志左侧', ui >= 0 && li >= 0 && ui === li - 1, headerBtns.join(','))
 
+      // ---- 13. 连点留下的多个空会话：同工作区只显示一个 ----
+      D.S.current = null
+      D.S.sessions = [
+        { id: 'k1', title: '', workspace: 'D:\\proj\\delta' },
+        { id: 'k2', title: '', workspace: 'D:\\proj\\delta' },
+        { id: 'k3', title: '', workspace: 'D:\\proj\\delta' },
+      ]
+      D.S.fresh = { k1: true, k2: true, k3: true }
+      D.renderSessions()
+      const rows = [...document.querySelectorAll('#sessions .row, #sessions .sitem, #sessions [data-id]')]
+      const shown = [...document.querySelectorAll('#sessions *')].filter(e => e.textContent === '新会话').length
+      check('三个空会话只显示一条', shown === 1, 'shown=' + shown)
+
       dump()
       const fails = out.filter(r => !r.pass).length
       if (errs.length) {
