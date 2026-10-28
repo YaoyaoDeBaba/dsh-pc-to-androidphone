@@ -23,7 +23,7 @@ $args = @(
   '--headless=new', '--disable-gpu', '--no-sandbox',
   '--allow-file-access-from-files',
   "--user-data-dir=$tmp",
-  '--virtual-time-budget=5000',
+  '--virtual-time-budget=15000',
   '--dump-dom',
   "file:///$($page -replace '\\', '/')"
 )
@@ -47,16 +47,24 @@ if ($seg -match 'class="bad">JS-ERRORS: ([^<]{0,300})') { Write-Host ('JS 异常
 
 # 静态检查：正式页面 index.html 的按钮摆位（自测页只是骨架，管不了正式页）
 $html = Get-Content (Join-Path $repo 'app/src/main/assets/index.html') -Raw
-$uiAt = $html.IndexOf('id="updateBtn"')
-$logAt = $html.IndexOf('id="logToggleBtn"')
-$h2At = $html.IndexOf('<h2>会话')
-$h2End = $html.IndexOf('</h2>', [Math]::Max(0, $h2At))
-if ($uiAt -lt 0) { Write-Host 'FAIL 正式页面没有 updateBtn'; $fails++ }
-elseif ($uiAt -gt $h2At -and $h2At -ge 0 -and $uiAt -lt $h2End) { Write-Host 'FAIL 更新按钮还在会话标题栏里'; $fails++ }
-elseif (-not ($logAt -gt $uiAt -and ($logAt - $uiAt) -lt 200)) { Write-Host 'FAIL 更新按钮没紧挨着日志按钮'; $fails++ }
-else { Write-Host 'PASS 正式页面：更新按钮在顶部、紧挨日志' }
+$hStart = $html.IndexOf('<header>'); $hEnd = $html.IndexOf('</header>')
+$headerBlock = if ($hStart -ge 0 -and $hEnd -gt $hStart) { $html.Substring($hStart, $hEnd - $hStart) } else { '' }
+$menuStart = $html.IndexOf('id="menuWrap"')
+$menuBlock = if ($menuStart -ge 0) { $html.Substring($menuStart, [Math]::Min(1200, $html.Length - $menuStart)) } else { '' }
+
+$problems = @()
+if ($headerBlock -notmatch 'id="gearBtn"') { $problems += '顶部没有齿轮按钮' }
+foreach ($id in 'updateBtn', 'logToggleBtn', 'repairBtn') {
+  if ($headerBlock -match "id=`"$id`"") { $problems += "$id 还留在顶部栏" }
+  if ($menuBlock -notmatch "id=`"$id`"") { $problems += "$id 不在齿轮菜单里" }
+}
+if ($html -notmatch 'id="confirmWrap"') { $problems += '没有 5 秒确认框' }
+
+if ($problems.Count) { $problems | ForEach-Object { Write-Host "FAIL $_" }; $fails += $problems.Count }
+else { Write-Host 'PASS 正式页面：顶部只有齿轮，更新/日志/重新配对在菜单里，确认框齐全' }
 
 Remove-Item "$tmp.out", "$tmp.err" -ErrorAction SilentlyContinue
 if ($fails -gt 0 -or $lines.Count -eq 0) { Write-Host "❌ $fails 项失败"; exit 1 }
 Write-Host "✅ 全部通过（$($lines.Count + 1) 项）"
 exit 0
+

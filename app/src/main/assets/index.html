@@ -22,8 +22,16 @@
   #renameBtn{padding:5px 8px;font-size:12px}
   #modelBtn{padding:5px 8px;font-size:11px;font-weight:500;max-width:17vw;overflow:hidden;text-overflow:ellipsis}
   #updateBtn,#logToggleBtn{padding:5px 8px;font-size:11px}
+  .btns{display:flex;gap:8px;justify-content:flex-end}
+  .btns button{flex:0 0 auto}
   .wsAdd{float:right;padding:2px 8px;font-size:11px;background:#2a2a40;color:#cfcfe0;border-radius:7px;margin-top:-3px}
-  #dlgWrap,#modelWrap{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+  #dlgWrap,#modelWrap,#menuWrap,#confirmWrap{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+  /* 齿轮菜单贴在右上角，像真的下拉菜单 */
+  #menuWrap{align-items:flex-start;justify-content:flex-end;padding:56px 12px 16px;background:rgba(0,0,0,.35)}
+  .sheet.menu{max-width:250px}
+  .mrow{display:block;width:100%;text-align:left;background:#23233a;color:var(--fg);margin-bottom:7px;padding:11px 12px;font-size:13px;font-weight:500}
+  .mrow.danger{background:#3a2330;color:#ffb3c4}
+  #gearBtn{padding:5px 7px;font-size:14px;line-height:1}
   .dlg{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;width:100%;max-width:430px}
   .dlgT{font-weight:600;font-size:14px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
   .dlgT .sp{flex:1}
@@ -86,8 +94,7 @@
     <button id="modelBtn" class="ghost" hidden>模型</button>
     <span id="status">启动中…</span>
     <button id="reconnectBtn" hidden>重连</button>
-    <button id="updateBtn" class="ghost" title="检查更新">更新</button>
-    <button id="logToggleBtn" class="ghost">日志</button>
+    <button id="gearBtn" class="ghost" title="菜单">⚙️</button>
   </header>
 
   <main id="main">
@@ -108,7 +115,7 @@
 
     <section id="listView" hidden>
       <div class="card">
-        <h2>会话 <span class="sp"></span><button id="refreshBtn" class="ghost">刷新</button><button id="repairBtn" class="ghost">重新配对</button></h2>
+        <h2>会话 <span class="sp"></span><button id="refreshBtn" class="ghost">刷新</button></h2>
         <div id="sessions"></div>
       </div>
     </section>
@@ -149,6 +156,27 @@
         <button id="modelClose" class="ghost">关闭</button>
       </div>
       <div id="modelList"></div>
+    </div>
+  </div>
+
+  <div id="menuWrap" hidden>
+    <div class="sheet menu">
+      <div class="dlgT">菜单<span class="sp"></span><button id="menuClose" class="ghost">关闭</button></div>
+      <button id="updateBtn" class="mrow">🔄 检查更新</button>
+      <button id="logToggleBtn" class="mrow">📜 日志</button>
+      <button id="repairBtn" class="mrow danger">⚠️ 重新配对</button>
+      <p class="muted" style="margin:8px 2px 0;font-size:11px">重新配对会让这台手机断开，得回家在电脑上取新配对码。</p>
+    </div>
+  </div>
+
+  <div id="confirmWrap" hidden>
+    <div class="dlg">
+      <div class="dlgT" id="cfTitle">确定吗？</div>
+      <p id="cfText" class="muted" style="margin:0 0 10px"></p>
+      <div class="btns">
+        <button id="cfOk" disabled>要等 5 秒</button>
+        <button id="cfCancel" class="ghost">取消</button>
+      </div>
     </div>
   </div>
 

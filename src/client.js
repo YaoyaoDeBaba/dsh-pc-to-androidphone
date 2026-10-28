@@ -137,6 +137,7 @@ const S = {
   modelErr: '',        // 取模型清单失败的原因
   newBusy: false,      // 正在新建会话（防连点）
   newBusyTimer: null,
+  cfTimer: 0,          // 重新配对确认框的倒计时
 }
 
 /* 模型选择按会话记在本地：重启 App 也能显示上次选的 */
@@ -159,6 +160,7 @@ function initEls() {
     'pairCode', 'connectBtn', 'relayUrl', 'saveRelayBtn', 'sessions', 'refreshBtn', 'repairBtn', 'updateBtn',
     'messages', 'msgInput', 'sendBtn', 'stopBtn', 'composer', 'log', 'clearLog', 'logToggleBtn', 'main', 'reconnectBtn',
     'modelBtn', 'renameBtn', 'dlgWrap', 'dlgTitle', 'dlgInput', 'dlgOk', 'dlgCancel',
+    'gearBtn', 'menuWrap', 'menuClose', 'confirmWrap', 'cfTitle', 'cfText', 'cfOk', 'cfCancel',
     'modelWrap', 'modelList', 'modelRefresh', 'modelClose']
   for (const k of ids) el[k] = $(k)
 }
@@ -291,9 +293,11 @@ function showView(name) {
   }
   if (el.dlgWrap) el.dlgWrap.hidden = true
   if (el.modelWrap) el.modelWrap.hidden = true
+  if (el.menuWrap) el.menuWrap.hidden = true
+  if (el.confirmWrap) { clearTimeout(S.cfTimer); S.cfTimer = 0; el.confirmWrap.hidden = true }
   if (name === 'chat' && el.main) el.main.scrollTop = el.main.scrollHeight
   if (el.reconnectBtn) el.reconnectBtn.hidden = !!S.paired
-  if (el.logToggleBtn) el.logToggleBtn.textContent = S.logOpen ? '收起' : '日志'
+  if (el.logToggleBtn) el.logToggleBtn.textContent = S.logOpen ? '📜 收起日志' : '📜 日志'
 }
 
 /* ================= 会话列表（含状态徽标） ================= */
@@ -1243,13 +1247,66 @@ window.__onUpdateLog = (s) => {
   setStatus('更新: ' + s, '#e0a83a')
 }
 
+/* ================= 小齿轮菜单 / 危险操作确认 ================= */
+function toggleMenu() {
+  if (!el.menuWrap) return
+  el.menuWrap.hidden = !el.menuWrap.hidden
+}
+function closeMenu() {
+  if (el.menuWrap) el.menuWrap.hidden = true
+}
+
+// 重新配对是不可逆的（要回家拿新配对码），所以让手指多等 5 秒
+function openRepairConfirm() {
+  if (!el.confirmWrap) return
+  el.confirmWrap.hidden = false
+  if (el.cfTitle) el.cfTitle.textContent = '真的要重新配对？'
+  if (el.cfText) {
+    el.cfText.textContent =
+      '断开后这台手机就控制不了电脑了，得回到家、在电脑上点开远控拿到新的 6 位配对码才能再连上。'
+  }
+  let left = 5
+  const tick = () => {
+    if (!el.cfOk) return
+    if (left > 0) {
+      el.cfOk.disabled = true
+      el.cfOk.textContent = '要等 ' + left + ' 秒'
+      left--
+      S.cfTimer = setTimeout(tick, 1000)
+    } else {
+      el.cfOk.disabled = false
+      el.cfOk.textContent = '确定重新配对'
+    }
+  }
+  clearTimeout(S.cfTimer)
+  tick()
+}
+function closeRepairConfirm() {
+  clearTimeout(S.cfTimer)
+  S.cfTimer = 0
+  if (el.confirmWrap) el.confirmWrap.hidden = true
+  if (el.cfOk) { el.cfOk.disabled = true; el.cfOk.textContent = '要等 5 秒' }
+}
+
+// 真正断开、回到配对页
+function doRepairPair() {
+  clearSession()
+  stopReconnect()
+  stopPing()
+  try { S.ws?.close() } catch (_) {}
+  S.ws = null
+  S.mode = 'pair'
+  S.paired = false
+  showView('pair')
+  setStatus('请输入新的配对码')
+}
+
 function boot() {
   initEls()
-
   // 日志栏偏好：记住上次是收起还是展开（默认收起）
   S.logOpen = localStorage.getItem('drc.logOpen') === '1'
   el.logCard.hidden = !S.logOpen
-  if (el.logToggleBtn) el.logToggleBtn.textContent = S.logOpen ? '收起' : '日志'
+  if (el.logToggleBtn) el.logToggleBtn.textContent = S.logOpen ? '📜 收起日志' : '📜 日志'
 
   if (el.relayUrl) {
     el.relayUrl.value = S.relay
@@ -1269,6 +1326,7 @@ function boot() {
   el.pairCode?.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(true) })
   el.refreshBtn?.addEventListener('click', () => { if (S.paired) cmdListSessions() })
   el.updateBtn?.addEventListener('click', () => {
+    closeMenu()
     try { window.dshApp.checkUpdate() } catch (_) { log('「更新」只在 App 内可用') }
   })
   el.backBtn?.addEventListener('click', goBack)
@@ -1297,10 +1355,11 @@ function boot() {
 
   // 日志栏：点「日志」展开，再点「收起」缩回；选择会被记住
   el.logToggleBtn?.addEventListener('click', () => {
+    closeMenu()
     S.logOpen = !S.logOpen
     localStorage.setItem('drc.logOpen', S.logOpen ? '1' : '0')
     el.logCard.hidden = !S.logOpen
-    el.logToggleBtn.textContent = S.logOpen ? '收起' : '日志'
+    el.logToggleBtn.textContent = S.logOpen ? '📜 收起日志' : '📜 日志'
   })
 
   el.reconnectBtn?.addEventListener('click', () => {
@@ -1309,18 +1368,20 @@ function boot() {
     connect()
   })
 
-  // 重新配对：清掉旧会话，回到配对页
-  el.repairBtn?.addEventListener('click', () => {
-    clearSession()
-    stopReconnect()
-    stopPing()
-    try { S.ws?.close() } catch (_) {}
-    S.ws = null
-    S.mode = 'pair'
-    S.paired = false
-    showView('pair')
-    setStatus('请输入新的配对码')
+  // 小齿轮菜单：更新 / 日志 / 重新配对 都收进来，顶部就清爽了
+  el.gearBtn?.addEventListener('click', (e) => { e.stopPropagation(); toggleMenu() })
+  el.menuClose?.addEventListener('click', closeMenu)
+  el.menuWrap?.addEventListener('click', (e) => { if (e.target === el.menuWrap) closeMenu() })
+  el.cfCancel?.addEventListener('click', closeRepairConfirm)
+  el.cfOk?.addEventListener('click', () => {
+    if (el.cfOk.disabled) return
+    closeRepairConfirm()
+    doRepairPair()
   })
+  el.confirmWrap?.addEventListener('click', (e) => { if (e.target === el.confirmWrap) closeRepairConfirm() })
+
+  // 重新配对：点菜单项先弹确认（还要等 5 秒），确认后才断
+  el.repairBtn?.addEventListener('click', () => { closeMenu(); openRepairConfirm() })
 
   // 回到前台立刻重连，不等退避；切后台时靠前台服务+心跳尽量撑住
   document.addEventListener('visibilitychange', () => {
@@ -1354,3 +1415,4 @@ if (document.readyState === 'loading') {
 try {
   globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession }
 } catch (_) {}
+

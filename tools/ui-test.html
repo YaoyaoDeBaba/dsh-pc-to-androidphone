@@ -25,8 +25,27 @@
   <button id="modelBtn" class="ghost" hidden>模型</button>
   <span id="status">测试中…</span>
   <button id="reconnectBtn" hidden>重连</button>
-  <button id="updateBtn" class="ghost" title="检查更新">更新</button>
-  <button id="logToggleBtn" class="ghost">日志</button>
+  <button id="gearBtn" class="ghost" title="菜单">⚙️</button>
+</div>
+
+<div id="menuWrap" hidden>
+  <div class="sheet menu">
+    <div class="dlgT">菜单<span class="sp"></span><button id="menuClose" class="ghost">关闭</button></div>
+    <button id="updateBtn" class="mrow">🔄 检查更新</button>
+    <button id="logToggleBtn" class="mrow">📜 日志</button>
+    <button id="repairBtn" class="mrow danger">⚠️ 重新配对</button>
+  </div>
+</div>
+
+<div id="confirmWrap" hidden>
+  <div class="dlg">
+    <div class="dlgT" id="cfTitle">确定吗？</div>
+    <p id="cfText" class="muted"></p>
+    <div class="btns">
+      <button id="cfOk" disabled>要等 5 秒</button>
+      <button id="cfCancel" class="ghost">取消</button>
+    </div>
+  </div>
 </div>
 
 <div id="pairView" hidden>
@@ -229,11 +248,32 @@
       check('点＋直接进空会话', D.S.current === 'e1', String(D.S.current))
       check('没有进入新建等待态', D.S.newBusy === false, String(D.S.newBusy))
 
-      // ---- 12. 顶部按钮：更新在日志左边（需求：搬到日志旁边） ----
+      // ---- 12. 顶部按钮：只剩齿轮，更新/日志/重新配对都收进菜单 ----
       const headerBtns = [...document.querySelectorAll('#head button')].map(b => b.id)
-      const ui = headerBtns.indexOf('updateBtn'), li = headerBtns.indexOf('logToggleBtn')
-      check('更新按钮在顶部', ui >= 0, headerBtns.join(','))
-      check('更新紧挨日志左侧', ui >= 0 && li >= 0 && ui === li - 1, headerBtns.join(','))
+      check('顶部有齿轮', headerBtns.includes('gearBtn'), headerBtns.join(','))
+      check('顶部没有更新按钮', !headerBtns.includes('updateBtn'), headerBtns.join(','))
+      check('顶部没有日志按钮', !headerBtns.includes('logToggleBtn'), headerBtns.join(','))
+      check('顶部没有重新配对', !headerBtns.includes('repairBtn'), headerBtns.join(','))
+
+      // ---- 12b. 点齿轮开菜单，三个动作都在里面 ----
+      D.el.gearBtn.click()
+      check('齿轮打开菜单', document.getElementById('menuWrap').hidden === false)
+      const menuIds = [...document.querySelectorAll('#menuWrap button')].map(b => b.id)
+      check('菜单里有更新/日志/重新配对', ['updateBtn', 'logToggleBtn', 'repairBtn'].every(k => menuIds.includes(k)), menuIds.join(','))
+
+      // ---- 12c. 点「重新配对」先弹确认框，确认键先禁用并倒计时 ----
+      D.el.repairBtn.click()
+      check('弹确认框', document.getElementById('confirmWrap').hidden === false)
+      check('菜单自动收起', document.getElementById('menuWrap').hidden === true)
+      const cfOk = document.getElementById('cfOk')
+      check('确认键先禁用', cfOk.disabled === true)
+      check('确认键显示倒计时', /要等 \d 秒/.test(cfOk.textContent), cfOk.textContent)
+
+      // ---- 12d. 取消后什么都不发生 ----
+      const viewBefore = D.S.view
+      D.el.cfCancel.click()
+      check('取消关掉确认框', document.getElementById('confirmWrap').hidden === true)
+      check('取消后页面没变', D.S.view === viewBefore, String(D.S.view))
 
       // ---- 13. 连点留下的多个空会话：同工作区只显示一个 ----
       D.S.current = null
@@ -278,15 +318,31 @@
       D.goBack()
       check('返回列表清掉记忆', localStorage.getItem('drc.open') === null, String(localStorage.getItem('drc.open')))
 
-      dump()
-      const fails = out.filter(r => !r.pass).length
-      if (errs.length) {
-        const d = document.createElement('div')
-        d.className = 'bad'
-        d.textContent = 'JS-ERRORS: ' + errs.join(' | ').slice(0, 300)
-        document.getElementById('res').appendChild(d)
+      // ---- 17. 倒计时走完才解锁，确认后才真的断开 ----
+      D.el.gearBtn.click()
+      D.el.repairBtn.click()
+      setTimeout(() => {
+        const ok = document.getElementById('cfOk')
+        check('5 秒后确认键解锁', ok.disabled === false, String(ok.disabled))
+        check('确认键文字变成「确定重新配对」', ok.textContent === '确定重新配对', ok.textContent)
+        localStorage.setItem('drc.psk', 'keepme')
+        ok.click()
+        check('确认后回到配对页', document.getElementById('pairView').hidden === false)
+        check('确认后清掉配对信息', localStorage.getItem('drc.psk') === null, String(localStorage.getItem('drc.psk')))
+        finish()
+      }, 5600)
+
+      function finish() {
+        dump()
+        const fails = out.filter(r => !r.pass).length
+        if (errs.length) {
+          const d = document.createElement('div')
+          d.className = 'bad'
+          d.textContent = 'JS-ERRORS: ' + errs.join(' | ').slice(0, 300)
+          document.getElementById('res').appendChild(d)
+        }
+        document.title = (fails || errs.length ? 'FAIL:' + (fails + errs.length) : 'PASS:' + out.length)
       }
-      document.title = (fails || errs.length ? 'FAIL:' + (fails + errs.length) : 'PASS:' + out.length)
     }, 60)
   })
 </script>
