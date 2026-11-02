@@ -422,7 +422,14 @@ function renderMessages() {
     d.textContent = m.text
     el.messages.appendChild(d)
     // 助理/系统消息里出现的图片路径 → 一颗「点我看图」的按钮（用户消息不认：那是自己打的字）
-    if (m.kind === 'msg' && m.role !== 'user' && m.text) appendImageBits(d, m)
+    // 兜住异常：看图出 bug 顶多没有按钮，绝不能把整页聊天气泡搞崩（这是用户的日常工具）
+    if (m.kind === 'msg' && m.role !== 'user' && m.text) {
+      try {
+        appendImageBits(d, m)
+      } catch (e) {
+        log('[看图] 渲染失败 ' + (e && e.message ? e.message : e))
+      }
+    }
   }
   // 空状态：至少告诉用户"这里没内容"，而不是一片空白
   if (!S.msgs.length && Object.keys(S.cards).length === 0) {
@@ -631,11 +638,12 @@ function baseNameOf(p) {
   return parts[parts.length - 1] || '图片'
 }
 
-async function loadImage(path, btn) {
+// requester 是注入点（自测用）：不传就走真的 requestCmd
+async function loadImage(path, btn, requester) {
   if (S.imgBusy[path]) return
   if (S.imgCache[path]) return   // 已经取过（renderMessages 会直接贴出来）
   S.imgBusy[path] = true
-  const oldText = btn.textContent
+  const oldText = btn ? btn.textContent : ''
   const parts = []
   let offset = 0
   let mime = 'image/png'
@@ -643,8 +651,9 @@ async function loadImage(path, btn) {
   let name = baseNameOf(path)
   try {
     for (let i = 0; i < IMG_MAX_CHUNKS; i++) {
-      btn.textContent = '取图中… ' + (total ? Math.min(99, Math.round((offset / total) * 100)) + '%' : '')
-      const res = await requestCmd({
+      if (btn) btn.textContent = '取图中… ' + (total ? Math.min(99, Math.round((offset / total) * 100)) + '%' : '')
+      const ask = requester || requestCmd
+      const res = await ask({
         t: 'cmd.file_image',
         cmdId: nextCmdId(),
         path,
@@ -673,7 +682,7 @@ async function loadImage(path, btn) {
     const msg = e && e.message ? e.message : String(e)
     log('[看图] ' + msg)
     setStatus(msg.slice(0, 42), '#ff5c7a')
-    btn.textContent = oldText
+    if (btn) btn.textContent = oldText
   } finally {
     S.imgBusy[path] = false
   }
@@ -1536,6 +1545,6 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession }
+  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages }
 } catch (_) {}
 

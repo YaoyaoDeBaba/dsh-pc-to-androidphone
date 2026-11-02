@@ -318,6 +318,52 @@
       D.goBack()
       check('返回列表清掉记忆', localStorage.getItem('drc.open') === null, String(localStorage.getItem('drc.open')))
 
+      // ---- 16b. 看图：路径变按钮 → 点了分块取图 → 贴出来；失败给人话 ----
+      void (async () => {
+        try {
+          const ps = D.findImagePaths('效果图 `E:\\MonSlayer\\Assets\\vfx 1.png` 以及 E:\\a\\b.jpg。')
+          check('认得反引号里带空格的路径', ps[0] === 'E:\\MonSlayer\\Assets\\vfx 1.png', JSON.stringify(ps))
+          check('裸路径也认得', ps.indexOf('E:\\a\\b.jpg') >= 0, JSON.stringify(ps))
+          check('非图片扩展名不认', D.findImagePaths('E:\\a\\b.txt').length === 0)
+
+          D.openSession('a1', '会话A')
+          D.S.msgs = []
+          D.applyEvent({ t: 'ev.message_delta', sessionId: 'a1', messageId: 'm_img1', role: 'assistant', delta: '做好了，预览在这：E:\\MonSlayer\\Preview.png' })
+          await new Promise((r) => setTimeout(r, 80))
+          const chips = [...document.querySelectorAll('.imgchip')]
+          check('消息里出现看图的按钮', chips.length === 1, 'count=' + chips.length)
+          check('按钮上写了文件名', !!chips[0] && chips[0].textContent.indexOf('Preview.png') >= 0, chips[0] ? chips[0].textContent : '')
+
+          const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4])
+          const enc = (u8) => btoa(String.fromCharCode.apply(null, Array.from(u8)))
+          const half = 4
+          const frames = [
+            { ok: true, data: { kind: 'image', name: 'Preview.png', mime: 'image/png', size: bytes.length, offset: 0, next: half, data: enc(bytes.subarray(0, half)) } },
+            { ok: true, data: { kind: 'image', name: 'Preview.png', mime: 'image/png', size: bytes.length, offset: half, data: enc(bytes.subarray(half)) } },
+          ]
+          const asked = []
+          const fakeAsk = async (payload) => {
+            asked.push(payload.offset)
+            return frames[asked.length - 1]
+          }
+          await D.loadImage('E:\\MonSlayer\\Preview.png', chips[0], fakeAsk)
+          check('按 next 连要两块', asked.length === 2 && asked[0] === undefined && asked[1] === half, JSON.stringify(asked))
+          check('图片贴进气泡', document.querySelectorAll('.msgimg').length === 1, 'count=' + document.querySelectorAll('.msgimg').length)
+          check('取到后按钮消失', document.querySelectorAll('.imgchip').length === 0)
+
+          D.S.msgs = []
+          D.applyEvent({ t: 'ev.message_delta', sessionId: 'a1', messageId: 'm_img2', role: 'assistant', delta: '这张 E:\\nope.png 你试试' })
+          D.renderMessages()
+          await new Promise((r) => setTimeout(r, 80))
+          const chip2 = document.querySelector('.imgchip')
+          const badAsk = async () => ({ ok: false, message: '主机上找不到这个文件：nope.png' })
+          await D.loadImage('E:\\nope.png', chip2, badAsk)
+          check('失败时按钮还在', document.querySelectorAll('.imgchip').length === 1)
+          check('失败原因写在状态栏', textOf('status').indexOf('找不到') >= 0, textOf('status'))
+        } catch (e) {
+          check('看图自测本身没抛异常', false, String(e && e.message ? e.message : e))
+        }
+      })()
       // ---- 17. 倒计时走完才解锁，确认后才真的断开 ----
       D.el.gearBtn.click()
       D.el.repairBtn.click()
