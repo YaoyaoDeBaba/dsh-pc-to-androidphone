@@ -70,6 +70,12 @@
   .msg.assistant,.msg.system{background:#20202f;border:1px solid #2c2c42}
   .msg.user{background:#2b3a66;margin-left:16%}
   .msg.tool{background:#191924;border:1px dashed #33334a;color:#9a9ab0;font-size:12px;padding:7px 10px}
+  /* 看图：消息里的图片路径变成一颗按钮，点了才从主机拉（省流量，大图分块传） */
+  .imgchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .imgchip{background:#2a3452;color:#cfe0ff;border:1px solid #3c4d7a;border-radius:8px;
+    font-size:12px;padding:6px 10px;max-width:100%;text-align:left;line-height:1.4;word-break:break-all}
+  .imgchip:active{background:#35406a}
+  .msgimg{display:block;max-width:100%;height:auto;border-radius:8px;margin-top:8px;background:#0e0e16}
   .card.appr{background:#241a1a;border-color:#5a2a33}
   .card.appr .t{font-weight:600;font-size:13px;margin-bottom:6px;word-break:break-word}
   .card.appr .sub{font-size:12px;color:#c9a;line-height:1.5;margin-bottom:8px;word-break:break-word;white-space:pre-wrap}

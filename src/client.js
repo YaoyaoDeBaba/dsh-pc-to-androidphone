@@ -6,6 +6,7 @@
  */
 import nacl from 'tweetnacl'
 import sha512Module from 'js-sha512'
+import { findImagePaths } from './imgpath.js'
 
 const sha512Fn = typeof sha512Module === 'function' ? sha512Module : sha512Module.sha512
 
@@ -134,6 +135,9 @@ const S = {
   hostModel: {},       // 电脑端 ev.model 广播来的真实模型名（用来显示；没选过时当兜底）
   fresh: {},           // 刚在手机上新建、还没标题的会话（列表里别藏起来）
   cmdNames: {},        // cmdId → 'rename' | 'models' | 'set_model'（失败时给提示用）
+  imgWaiters: {},      // cmdId → 回执回调（看图的 ev.result 按 cmdId 结算）
+  imgBusy: {},         // 图片路径 → 正在取（防连点）
+  imgCache: {},        // 图片路径 → { url, name, bytes }（同一路径不重复取）
   modelErr: '',        // 取模型清单失败的原因
   newBusy: false,      // 正在新建会话（防连点）
   newBusyTimer: null,
@@ -417,6 +421,8 @@ function renderMessages() {
     d.className = 'msg ' + (m.kind === 'tool' ? 'tool' : (m.role || 'assistant'))
     d.textContent = m.text
     el.messages.appendChild(d)
+    // 助理/系统消息里出现的图片路径 → 一颗「点我看图」的按钮（用户消息不认：那是自己打的字）
+    if (m.kind === 'msg' && m.role !== 'user' && m.text) appendImageBits(d, m)
   }
   // 空状态：至少告诉用户"这里没内容"，而不是一片空白
   if (!S.msgs.length && Object.keys(S.cards).length === 0) {
@@ -431,6 +437,38 @@ function renderMessages() {
     el.messages.appendChild(renderCard(rid, card))
   }
   autoScroll()
+}
+
+// 一个气泡里的「看图」部分：路径按钮 + 已经取到的图片。
+// 路径识别按正文长度缓存：流式追加时每帧都跑正则是白烧 CPU。
+function appendImageBits(d, m) {
+  if (m.imgKey !== m.text.length) {
+    m.imgKey = m.text.length
+    m.imgPaths = findImagePaths(m.text)
+  }
+  const paths = m.imgPaths || []
+  if (paths.length) {
+    const wrap = document.createElement('div')
+    wrap.className = 'imgchips'
+    for (const p of paths) {
+      if (S.imgCache[p]) continue          // 已经取到了，直接贴图，不再给按钮
+      const b = document.createElement('button')
+      b.className = 'imgchip'
+      b.textContent = '🖼 ' + baseNameOf(p) + ' · 点我看图'
+      b.onclick = () => loadImage(p, b)
+      wrap.appendChild(b)
+    }
+    if (wrap.childNodes.length) d.appendChild(wrap)
+  }
+  for (const p of paths) {
+    const hit = S.imgCache[p]
+    if (!hit) continue
+    const img = document.createElement('img')
+    img.className = 'msgimg'
+    img.src = hit.url
+    img.alt = hit.name
+    d.appendChild(img)
+  }
 }
 
 function renderCard(rid, card) {
@@ -560,6 +598,85 @@ function sendSealed(payload) {
   try { localStorage.setItem('drc.seq', String(S.outSeq)) } catch (_) {}
   const rec = seal(S.kC2H, payload, nonce)
   sendRaw({ t: 'enc', sessionId: S.convId, seq, ciphertext: rec.ciphertext })
+}
+
+/* ================= 看图：向主机要图片 ================= */
+/*
+ * 一条命令只回一块（中继单帧硬上限 1MB，整张图会被掐断连接、App 直接掉线），
+ * 所以这里是「要一块 → 再要下一块」的循环，本地拼成 Blob 再显示。
+ * 时序：sendSealed 发出去，回执在 applyEvent 的 ev.result 里按 cmdId 结算。
+ */
+const IMG_CMD_TIMEOUT_MS = 20000
+// 240 × 256KB ≈ 60MB，主机侧上限 20MB，留足余量（主要防主机回next 写错时死循环）
+const IMG_MAX_CHUNKS = 240
+
+function requestCmd(payload, timeoutMs) {
+  return new Promise((resolve) => {
+    const id = payload.cmdId
+    const timer = setTimeout(() => {
+      delete S.imgWaiters[id]
+      resolve({ ok: false, message: '主机没回应（超时）' })
+    }, timeoutMs || IMG_CMD_TIMEOUT_MS)
+    S.imgWaiters[id] = (res) => {
+      clearTimeout(timer)
+      delete S.imgWaiters[id]
+      resolve(res)
+    }
+    sendSealed(payload)
+  })
+}
+
+function baseNameOf(p) {
+  const parts = String(p || '').split(/[\\/]/)
+  return parts[parts.length - 1] || '图片'
+}
+
+async function loadImage(path, btn) {
+  if (S.imgBusy[path]) return
+  if (S.imgCache[path]) return   // 已经取过（renderMessages 会直接贴出来）
+  S.imgBusy[path] = true
+  const oldText = btn.textContent
+  const parts = []
+  let offset = 0
+  let mime = 'image/png'
+  let total = 0
+  let name = baseNameOf(path)
+  try {
+    for (let i = 0; i < IMG_MAX_CHUNKS; i++) {
+      btn.textContent = '取图中… ' + (total ? Math.min(99, Math.round((offset / total) * 100)) + '%' : '')
+      const res = await requestCmd({
+        t: 'cmd.file_image',
+        cmdId: nextCmdId(),
+        path,
+        ...(offset ? { offset } : {}),
+      })
+      if (!res.ok) throw new Error(res.message || '取图失败')
+      const d = res.data && typeof res.data === 'object' ? res.data : {}
+      if (d.kind !== 'image') throw new Error('主机回的不是图片块（主机插件版本太旧？）')
+      if (i === 0) {
+        mime = d.mime || mime
+        name = d.name || name
+        total = Number(d.size) || 0
+      }
+      const bytes = b64d(String(d.data || ''))
+      if (bytes.length) parts.push(bytes)
+      if (d.next === undefined || d.next === null) break
+      offset = Number(d.next) || 0
+      if (!offset) throw new Error('主机的分块偏移不合法')
+    }
+    if (!parts.length) throw new Error('这张图是空的')
+    const url = URL.createObjectURL(new Blob(parts, { type: mime }))
+    S.imgCache[path] = { url, name, bytes: total }
+    renderMessages()
+    setStatus('图已取到（' + Math.max(1, Math.round(total / 1024)) + 'KB）', '#3ecf8e')
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e)
+    log('[看图] ' + msg)
+    setStatus(msg.slice(0, 42), '#ff5c7a')
+    btn.textContent = oldText
+  } finally {
+    S.imgBusy[path] = false
+  }
 }
 
 function cmdListSessions() {
@@ -794,6 +911,12 @@ function applyEvent(p) {
     return
   }
   if (t === 'ev.result') {
+    // 看图的回执走这里结算：它是 a 请求/回执 一对一，不能落到下面那套「按功能名分流」的分支里
+    const imgWaiter = S.imgWaiters[p.cmdId]
+    if (imgWaiter) {
+      imgWaiter({ ok: p.ok === true, message: p.message, data: p.data })
+      return
+    }
     const d = p.data && typeof p.data === 'object' ? p.data : null
     const wanted = S.cmdNames[p.cmdId]
     if (wanted) delete S.cmdNames[p.cmdId]
