@@ -360,6 +360,18 @@
           await D.loadImage('E:\\nope.png', chip2, badAsk)
           check('失败时按钮还在', document.querySelectorAll('.imgchip').length === 1)
           check('失败原因写在状态栏', textOf('status').indexOf('找不到') >= 0, textOf('status'))
+          const chipText = document.querySelector('.imgchip') ? document.querySelector('.imgchip').textContent : ''
+          check('失败原因也留在按钮上（状态栏会被运行态覆盖）', chipText.indexOf('⚠️') >= 0 && chipText.indexOf('找不到') >= 0, chipText)
+          // 空 delta（只收尾的帧）不许建空气泡
+          D.S.msgs = []
+          D.applyEvent({ t: 'ev.message_delta', sessionId: 'a1', messageId: 'm_empty1', role: 'assistant', delta: '', done: true })
+          D.renderMessages()
+          const nEmpty = document.querySelectorAll('#messages .msg').length
+          check('空 delta 不建空气泡', nEmpty === 0, 'count=' + nEmpty)
+          D.applyEvent({ t: 'ev.message_delta', sessionId: 'a1', messageId: 'm_ok1', role: 'assistant', delta: '正常正文' })
+          D.renderMessages()
+          const nOk = document.querySelectorAll('#messages .msg').length
+          check('正常 delta 照旧建气泡', nOk === 1, 'count=' + nOk)
         } catch (e) {
           check('看图自测本身没抛异常', false, String(e && e.message ? e.message : e))
         }

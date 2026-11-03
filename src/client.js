@@ -682,7 +682,9 @@ async function loadImage(path, btn, requester) {
     const msg = e && e.message ? e.message : String(e)
     log('[看图] ' + msg)
     setStatus(msg.slice(0, 42), '#ff5c7a')
-    if (btn) btn.textContent = oldText
+    // 状态栏那条会被 run_state 立刻覆盖（表现就是「点一下只闪一下」），原因必须留在按钮上
+    const hint = /不支持|认不出|升级/.test(msg) ? '主机插件还是旧版，重启 DSH 后再点' : msg
+    if (btn) btn.textContent = '⚠️ ' + hint.slice(0, 26) + '（点我再试）'
   } finally {
     S.imgBusy[path] = false
   }
@@ -1040,6 +1042,8 @@ function applyEvent(p) {
           }
         }
         if (!m) {
+          // 空正文的用户帧同样不建气泡（纯图片的 splice 之类）
+          if (!text) break
           m = { id: mid, kind: 'msg', role: 'user', text, at: Date.now() }
           S.msgs.push(m)
         } else if (text && m.text !== text && text.startsWith(m.text)) {
@@ -1051,9 +1055,17 @@ function applyEvent(p) {
       }
 
       // —— 助理 / 其它角色：原有流式拼接 ——
+      const deltaText = typeof p.delta === 'string' ? p.delta : ''
       let m = S.msgs.find(x => x.id === mid && x.kind !== 'tool')
-      if (!m) { m = { id: mid, kind: 'msg', role: p.role || 'assistant', text: '' }; S.msgs.push(m) }
-      if (typeof p.delta === 'string') m.text += p.delta
+      if (!m) {
+        // 空正文的帧**不建气泡**：工具步一步正文都没出时主机会补一帧「只收尾」的空 delta，
+        // 而工具行已经不往手机同步了 —— 这种帧建出来就是一条永远空着的气泡。
+        // 收尾不需要气泡：运行态由 ev.run_state 管，进度在状态栏。
+        if (!deltaText) break
+        m = { id: mid, kind: 'msg', role: p.role || 'assistant', text: '' }
+        S.msgs.push(m)
+      }
+      if (deltaText) m.text += deltaText
       if (p.role) m.role = p.role
       if (p.done) m.done = true
       scheduleRender()
