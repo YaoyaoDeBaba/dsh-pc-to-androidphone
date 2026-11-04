@@ -89,6 +89,23 @@
   footer{flex:0 0 auto;display:flex;gap:8px;padding:9px 12px;border-top:1px solid var(--line);
     background:#171724;padding-bottom:calc(9px + env(safe-area-inset-bottom))}
   #log{max-height:24vh;overflow:auto;font-size:11px;line-height:1.45;color:#9a9ab0;margin:0;white-space:pre-wrap;word-break:break-all}
+  /* 悬浮大肥鱼（占位形象）：可拖动；位置记在 localStorage；点一下冒个小气泡 */
+  #fishFab{position:fixed;left:0;top:0;z-index:40;width:64px;height:64px;touch-action:none;
+    user-select:none;-webkit-user-select:none}
+  #fishFab[hidden]{display:none !important}
+  #fishBody{width:64px;height:64px;cursor:grab;filter:drop-shadow(0 6px 10px rgba(0,0,0,.45))}
+  #fishFab.drag #fishBody{cursor:grabbing}
+  #fishFab .fishSvg{width:100%;height:100%;display:block;pointer-events:none}
+  #fishFab.think #fishBody{animation:fishBob 1.05s ease-in-out infinite}
+  #fishFab.away #fishBody{opacity:.55;filter:grayscale(.75)}
+  #fishFab.drag #fishBody{filter:drop-shadow(0 10px 16px rgba(0,0,0,.55));animation:none}
+  .fishEye{transform-origin:center;animation:fishBlink 4.4s ease-in-out infinite}
+  #fishBubble{position:absolute;right:0;bottom:66px;background:#23233a;border:1px solid #33334a;
+    color:#e8e8f0;font-size:12px;line-height:1.35;padding:7px 10px;border-radius:10px;white-space:nowrap;
+    max-width:62vw;overflow:hidden;text-overflow:ellipsis;box-shadow:0 6px 18px rgba(0,0,0,.35)}
+  #fishBubble.left{right:auto;left:0}
+  @keyframes fishBob{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-7px) rotate(3deg)}}
+  @keyframes fishBlink{0%,93%,100%{transform:scaleY(1)}96%{transform:scaleY(.12)}}
 </style>
 </head>
 <body>
@@ -143,6 +160,25 @@
     <button id="sendBtn">发</button>
     <button id="stopBtn" class="ghost" title="中断本轮">停</button>
   </footer>
+
+  <!-- 悬浮大肥鱼：占位形象（等真素材到了只换这里面的 svg/图片） -->
+  <div id="fishFab" hidden>
+    <div id="fishBubble" hidden></div>
+    <div id="fishBody" role="button" aria-label="大肥鱼">
+      <svg class="fishSvg" viewBox="0 0 64 64" aria-hidden="true">
+        <ellipse cx="30" cy="37" rx="19.5" ry="15" fill="#5b8cff"/>
+        <ellipse cx="30" cy="43" rx="14" ry="8.5" fill="#dbe6ff"/>
+        <path d="M47 31c6.5-6.5 10.5-4.5 12.5 1.2-4.2 2.2-7 5-8.2 8.4z" fill="#4a76e0"/>
+        <ellipse cx="30" cy="38" rx="19.5" ry="15" fill="none" stroke="#3f6ad4" stroke-width="1.2" opacity=".55"/>
+        <circle cx="22" cy="33.4" r="3.4" fill="#fff"/>
+        <circle class="fishEye" cx="22.6" cy="33.4" r="1.7" fill="#182038"/>
+        <path d="M18 38.5c2-.8 4-.8 6 0" stroke="#3f6ad4" stroke-width="1.3" fill="none" stroke-linecap="round" opacity=".5"/>
+        <path d="M30 18c0-4.5 2-7 4.5-8.2" stroke="#9cc3ff" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+        <circle cx="36" cy="9" r="1.7" fill="#9cc3ff"/>
+        <circle cx="40.5" cy="11.6" r="1.2" fill="#9cc3ff"/>
+      </svg>
+    </div>
+  </div>
 
   <div id="dlgWrap" hidden>
     <div class="dlg">

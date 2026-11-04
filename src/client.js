@@ -165,7 +165,8 @@ function initEls() {
     'messages', 'msgInput', 'sendBtn', 'stopBtn', 'composer', 'log', 'clearLog', 'logToggleBtn', 'main', 'reconnectBtn',
     'modelBtn', 'renameBtn', 'dlgWrap', 'dlgTitle', 'dlgInput', 'dlgOk', 'dlgCancel',
     'gearBtn', 'menuWrap', 'menuClose', 'confirmWrap', 'cfTitle', 'cfText', 'cfOk', 'cfCancel',
-    'modelWrap', 'modelList', 'modelRefresh', 'modelClose']
+    'modelWrap', 'modelList', 'modelRefresh', 'modelClose',
+    'fishFab', 'fishBubble', 'fishBody']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -175,6 +176,7 @@ function setStatus(text, color) {
     el.status.textContent = text
     el.status.style.color = color || '#8a8aa0'
   }
+  fishSync()
 }
 
 const logLines = []
@@ -302,6 +304,7 @@ function showView(name) {
   if (name === 'chat' && el.main) el.main.scrollTop = el.main.scrollHeight
   if (el.reconnectBtn) el.reconnectBtn.hidden = !!S.paired
   if (el.logToggleBtn) el.logToggleBtn.textContent = S.logOpen ? '📜 收起日志' : '📜 日志'
+  fishSync()
 }
 
 /* ================= 会话列表（含状态徽标） ================= */
@@ -1445,8 +1448,147 @@ function doRepairPair() {
   setStatus('请输入新的配对码')
 }
 
+
+/* ================= 悬浮大肥鱼（占位形象，0.9.x） ================= */
+/*
+ * 目标形态是「形象住进手机 App」：一只可拖动的鲸鱼常年浮在界面上，
+ * 电脑端在跑活时它会晃、点一下放个小气泡。现在用的是**占位画**（内联 SVG），
+ * 等真素材（帧图）到了只换 #fishBody 里的内容，交互和状态全不用动。
+ *
+ * 状态：
+ *   off   —— 没配对 / 不在会话页（看不见）
+ *   away  —— 主机暂时离线（半透明、去色）
+ *   think —— 当前会话在跑（上下晃）
+ *   idle  —— 在线空闲（呼吸 + 偶尔眨眼）
+ */
+const FISH_POS_KEY = 'drc.fishPos'
+const FISH_SIZE = 64
+const FISH_TAP_SLOP = 8
+let fishDrag = null
+let fishBubbleTimer = 0
+
+function readFishPos() {
+  try {
+    const raw = localStorage.getItem(FISH_POS_KEY)
+    const pos = raw ? JSON.parse(raw) : null
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) return { x: pos.x, y: pos.y }
+  } catch (_) {}
+  return null
+}
+
+function clampFish(x, y) {
+  const w = document.documentElement.clientWidth || window.innerWidth || 360
+  const h = window.innerHeight || document.documentElement.clientHeight || 640
+  const maxX = Math.max(8, w - FISH_SIZE - 8)
+  const maxY = Math.max(8, h - FISH_SIZE - 8 - 72)   // 别压在输入框上
+  return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) }
+}
+
+function placeFish(x, y, persist) {
+  const fab = el.fishFab
+  if (!fab) return
+  const p = clampFish(x, y)
+  fab.style.left = p.x + 'px'
+  fab.style.top = p.y + 'px'
+  if (el.fishBubble) el.fishBubble.classList.toggle('left', p.x < 120)
+  if (persist) {
+    try { localStorage.setItem(FISH_POS_KEY, JSON.stringify(p)) } catch (_) {}
+  }
+}
+
+function fishState() {
+  if (!S.paired) return 'off'
+  if (S.hostAway) return 'away'
+  if (S.current && S.running[S.current]) return 'think'
+  return 'idle'
+}
+
+function fishBubbleText() {
+  if (!S.paired) return '还没连上电脑'
+  if (S.hostAway) return '电脑暂时离线，等等它'
+  const busy = !!(S.current && S.running[S.current])
+  return (S.current ? (S.currentTitle || '对话') + '：' : '') + (busy ? '在回话…' : '空闲')
+}
+
+function fishSync() {
+  const fab = el.fishFab
+  if (!fab) return
+  const visible = S.paired && S.view !== 'pair'
+  fab.hidden = !visible
+  if (!visible) return
+  const state = fishState()
+  fab.classList.toggle('think', state === 'think')
+  fab.classList.toggle('away', state === 'away')
+  if (el.fishBubble && !el.fishBubble.hidden) el.fishBubble.textContent = fishBubbleText()
+}
+
+function fishSay(toggle) {
+  if (!el.fishBubble || !el.fishFab || el.fishFab.hidden) return
+  el.fishBubble.textContent = fishBubbleText()
+  if (toggle && !el.fishBubble.hidden) {
+    el.fishBubble.hidden = true
+    return
+  }
+  el.fishBubble.hidden = false
+  clearTimeout(fishBubbleTimer)
+  fishBubbleTimer = setTimeout(() => { if (el.fishBubble) el.fishBubble.hidden = true }, 2600)
+}
+
+function initFish() {
+  const fab = el.fishFab
+  const body = el.fishBody
+  if (!fab || !body) return
+  const saved = readFishPos()
+  const w = document.documentElement.clientWidth || window.innerWidth || 360
+  const h = window.innerHeight || document.documentElement.clientHeight || 640
+  if (saved) placeFish(saved.x, saved.y, false)
+  else placeFish(w - FISH_SIZE - 16, h - FISH_SIZE - 96, false)
+  window.addEventListener('resize', () => {
+    const cur = readFishPos()
+    if (cur) placeFish(cur.x, cur.y, false)
+  })
+
+  const down = (ev) => {
+    if (typeof ev.button === 'number' && ev.button !== 0) return
+    fishDrag = {
+      x: ev.clientX, y: ev.clientY,
+      left: parseFloat(fab.style.left) || 0,
+      top: parseFloat(fab.style.top) || 0,
+      moved: false,
+    }
+    fab.classList.add('drag')
+    try { body.setPointerCapture(ev.pointerId) } catch (_) {}
+  }
+  const move = (ev) => {
+    if (!fishDrag) return
+    const dx = ev.clientX - fishDrag.x
+    const dy = ev.clientY - fishDrag.y
+    if (!fishDrag.moved && Math.abs(dx) + Math.abs(dy) > FISH_TAP_SLOP) fishDrag.moved = true
+    if (fishDrag.moved) placeFish(fishDrag.left + dx, fishDrag.top + dy, false)
+  }
+  const up = (ev) => {
+    if (!fishDrag) return
+    const moved = fishDrag.moved
+    fishDrag = null
+    fab.classList.remove('drag')
+    try { body.releasePointerCapture(ev.pointerId) } catch (_) {}
+    if (moved) {
+      placeFish(parseFloat(fab.style.left) || 0, parseFloat(fab.style.top) || 0, true)
+      return
+    }
+    fishSay(true)
+  }
+  body.addEventListener('pointerdown', down)
+  body.addEventListener('pointermove', move)
+  body.addEventListener('pointerup', up)
+  body.addEventListener('pointercancel', () => { fishDrag = null; fab.classList.remove('drag') })
+  fab.hidden = true
+  fishSync()
+}
+
 function boot() {
   initEls()
+  initFish()
   // 日志栏偏好：记住上次是收起还是展开（默认收起）
   S.logOpen = localStorage.getItem('drc.logOpen') === '1'
   el.logCard.hidden = !S.logOpen
@@ -1557,6 +1699,6 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages }
+  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay }
 } catch (_) {}
 

@@ -69,6 +69,9 @@
 <div class="card" id="logCard" hidden><button id="clearLog">清空</button><pre id="log"></pre></div>
 <div id="main"></div>
 
+<!-- 悬浮大肥鱼（占位形象）的骨架 -->
+<div id="fishFab" hidden><div id="fishBubble" hidden></div><div id="fishBody"></div></div>
+
 <div id="dlgWrap" hidden>
   <div class="dlg">
     <div class="dlgT" id="dlgTitle">会话名称</div>
@@ -376,6 +379,44 @@
           check('看图自测本身没抛异常', false, String(e && e.message ? e.message : e))
         }
       })()
+      // ---- 18. 悬浮大肥鱼（占位形象）：配对后出现，跑活时晃，点一下冒气泡 ----
+      // 用独立会话 id，别动异步看图自测正在用的 a1 消息列表
+      D.S.current = 'fish-1'
+      D.S.currentTitle = '悬浮测试'
+      D.S.paired = false
+      D.showView('chat')
+      check('没配对时不显示悬浮小人', document.getElementById('fishFab').hidden === true)
+      D.S.paired = true
+      D.S.running = {}
+      D.showView('chat')
+      const fab = document.getElementById('fishFab')
+      check('配对后悬浮小人出现', fab && fab.hidden === false)
+      check('空闲时不晃', fab.classList.contains('think') === false)
+      D.applyEvent({ t: 'ev.run_state', sessionId: 'fish-1', state: 'running' })
+      check('运行中会晃', fab.classList.contains('think') === true)
+      D.applyEvent({ t: 'ev.run_state', sessionId: 'fish-1', state: 'idle' })
+      check('跑完恢复空闲', fab.classList.contains('think') === false)
+      const fishBody = document.getElementById('fishBody')
+      const down = new PointerEvent('pointerdown', { bubbles: true, clientX: 12, clientY: 12, pointerId: 7 })
+      const up = new PointerEvent('pointerup', { bubbles: true, clientX: 12, clientY: 12, pointerId: 7 })
+      fishBody.dispatchEvent(down)
+      fishBody.dispatchEvent(up)
+      check('点一下冒出小气泡', document.getElementById('fishBubble').hidden === false)
+      check('气泡里写了状态', document.getElementById('fishBubble').textContent.indexOf('空闲') >= 0, document.getElementById('fishBubble').textContent)
+      document.getElementById('fishBubble').hidden = true
+      localStorage.removeItem('drc.fishPos')
+      fishBody.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 20, pointerId: 8 }))
+      fishBody.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 120, clientY: 140, pointerId: 8 }))
+      fishBody.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 120, clientY: 140, pointerId: 8 }))
+      const savedPos = localStorage.getItem('drc.fishPos')
+      check('拖动后位置记下来', !!savedPos, String(savedPos))
+      check('拖动后位置真的变了', (parseFloat(fab.style.left) || 0) > 20, fab.style.left)
+      check('拖动不冒气泡', document.getElementById('fishBubble').hidden === true)
+      D.showView('pair')
+      check('配对页不显示悬浮小人', document.getElementById('fishFab').hidden === true)
+      // 异步看图自测还要接着用 a1，把当前会话还回去
+      D.S.current = 'a1'
+
       // ---- 17. 倒计时走完才解锁，确认后才真的断开 ----
       D.el.gearBtn.click()
       D.el.repairBtn.click()
