@@ -70,7 +70,7 @@
 <div id="main"></div>
 
 <!-- 悬浮大肥鱼（占位形象）的骨架 -->
-<div id="fishFab" hidden><div id="fishBubble" hidden></div><div id="fishBody"></div></div>
+<div id="fishFab" hidden><div id="fishBubble" hidden></div><div id="fishBody"><img id="fishImg" hidden alt=""><svg class="fishSvg" viewBox="0 0 64 64"></svg></div></div>
 
 <div id="dlgWrap" hidden>
   <div class="dlg">
@@ -412,6 +412,9 @@
       check('拖动后位置记下来', !!savedPos, String(savedPos))
       check('拖动后位置真的变了', (parseFloat(fab.style.left) || 0) > 20, fab.style.left)
       check('拖动不冒气泡', document.getElementById('fishBubble').hidden === true)
+      setTimeout(() => {
+        check('没有真素材时继续用占位画', document.getElementById('fishImg').hidden === true)
+      }, 150)
       D.showView('pair')
       check('配对页不显示悬浮小人', document.getElementById('fishFab').hidden === true)
       // 异步看图自测还要接着用 a1，把当前会话还回去

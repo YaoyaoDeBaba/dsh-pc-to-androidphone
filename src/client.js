@@ -166,7 +166,7 @@ function initEls() {
     'modelBtn', 'renameBtn', 'dlgWrap', 'dlgTitle', 'dlgInput', 'dlgOk', 'dlgCancel',
     'gearBtn', 'menuWrap', 'menuClose', 'confirmWrap', 'cfTitle', 'cfText', 'cfOk', 'cfCancel',
     'modelWrap', 'modelList', 'modelRefresh', 'modelClose',
-    'fishFab', 'fishBubble', 'fishBody']
+    'fishFab', 'fishBubble', 'fishBody', 'fishImg']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -1503,6 +1503,46 @@ function fishState() {
   return 'idle'
 }
 
+/*
+ * 真素材挂载（可选）：assets/fish/idle.png + assets/fish/think.png。
+ * 存在就用图片（SVG 占位画藏起来），缺了/加载失败就继续用 SVG —— 换皮不需要改逻辑。
+ */
+const FISH_ART = { idle: 'fish/idle.png', think: 'fish/think.png' }
+const fishArtReady = {}
+function hasFishArt(state) {
+  const src = FISH_ART[state]
+  if (!src) return false
+  const img = el.fishImg
+  if (!img) return false
+  if (fishArtReady[src] === undefined) return false
+  return fishArtReady[src] === true
+}
+function loadFishArt() {
+  const img = el.fishImg
+  if (!img) return
+  const check = (src) => new Promise((resolve) => {
+    const probe = new Image()
+    probe.onload = () => { fishArtReady[src] = true; resolve(true) }
+    probe.onerror = () => { fishArtReady[src] = false; resolve(false) }
+    probe.src = src
+  })
+  void Promise.all([check(FISH_ART.idle), check(FISH_ART.think)]).then(() => {
+    const first = Object.keys(FISH_ART).find((state) => fishArtReady[FISH_ART[state]] === true)
+    if (first) img.hidden = false
+    fishSync()
+  })
+}
+function paintFishArt(state) {
+  const img = el.fishImg
+  const svg = el.fishBody && el.fishBody.querySelector('.fishSvg')
+  const want = FISH_ART[state] && fishArtReady[FISH_ART[state]] === true
+  if (img) {
+    img.hidden = !want
+    if (want) img.src = FISH_ART[state]
+  }
+  if (svg) svg.style.display = want ? 'none' : ''
+}
+
 function fishBubbleText() {
   if (!S.paired) return '还没连上电脑'
   if (S.hostAway) return '电脑暂时离线，等等它'
@@ -1519,6 +1559,7 @@ function fishSync() {
   const state = fishState()
   fab.classList.toggle('think', state === 'think')
   fab.classList.toggle('away', state === 'away')
+  paintFishArt(state === 'think' ? 'think' : 'idle')
   if (el.fishBubble && !el.fishBubble.hidden) el.fishBubble.textContent = fishBubbleText()
 }
 
@@ -1538,6 +1579,7 @@ function initFish() {
   const fab = el.fishFab
   const body = el.fishBody
   if (!fab || !body) return
+  loadFishArt()
   const saved = readFishPos()
   const w = document.documentElement.clientWidth || window.innerWidth || 360
   const h = window.innerHeight || document.documentElement.clientHeight || 640
