@@ -18,6 +18,17 @@ $browsers = @(
 $browser = $browsers | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $browser) { Write-Error "没找到 Edge/Chrome，装一个再来"; exit 1 }
 
+# 序列帧自测要能读到真图集：临时拷一份到 tools/fish/（页面是 tools/，相对路径 fish/...），跑完删掉
+$fishSrc = Join-Path $repo 'app/src/main/assets/fish'
+$fishTmp = Join-Path $repo 'tools/fish'
+$fishCopied = $false
+if (Test-Path (Join-Path $fishSrc 'dafeiyu_Idle.webp')) {
+  New-Item -ItemType Directory -Force -Path $fishTmp | Out-Null
+  Copy-Item (Join-Path $fishSrc 'dafeiyu_Idle.webp') $fishTmp -Force
+  if (Test-Path (Join-Path $fishSrc 'think.png')) { Copy-Item (Join-Path $fishSrc 'think.png') $fishTmp -Force }
+  $fishCopied = $true
+}
+
 $tmp = Join-Path $env:TEMP ("drc-uitest-" + [guid]::NewGuid().ToString('N'))
 $args = @(
   '--headless=new', '--disable-gpu', '--no-sandbox',
@@ -64,6 +75,7 @@ if ($problems.Count) { $problems | ForEach-Object { Write-Host "FAIL $_" }; $fai
 else { Write-Host 'PASS 正式页面：顶部只有齿轮，更新/日志/重新配对在菜单里，确认框齐全' }
 
 Remove-Item "$tmp.out", "$tmp.err" -ErrorAction SilentlyContinue
+if ($fishCopied) { Remove-Item $fishTmp -Recurse -Force -ErrorAction SilentlyContinue }
 if ($fails -gt 0 -or $lines.Count -eq 0) { Write-Host "❌ $fails 项失败"; exit 1 }
 Write-Host "✅ 全部通过（$($lines.Count + 1) 项）"
 exit 0

@@ -70,7 +70,7 @@
 <div id="main"></div>
 
 <!-- 悬浮大肥鱼（占位形象）的骨架 -->
-<div id="fishFab" hidden><div id="fishBubble" hidden></div><div id="fishBody"><img id="fishImg" hidden alt=""><svg class="fishSvg" viewBox="0 0 64 64"></svg></div></div>
+<div id="fishFab" hidden><div id="fishBubble" hidden></div><div id="fishBody"><div id="fishSprite" hidden></div><img id="fishImg" hidden alt=""><svg class="fishSvg" viewBox="0 0 64 64"></svg></div></div>
 
 <div id="dlgWrap" hidden>
   <div class="dlg">
@@ -415,10 +415,33 @@
       setTimeout(() => {
         const img = document.getElementById('fishImg')
         const svg = document.querySelector('#fishBody .fishSvg')
-        const loaded = !!img && img.complete && img.naturalWidth > 0
-        // 有真素材就只显示图片、藏起占位画；没素材就反过来 —— 二者永远只出一个
-        check('占位画/真素材只显示一个', loaded ? (!img.hidden && svg.style.display === 'none') : (img.hidden && svg.style.display !== 'none'))
-      }, 150)
+        const sprite = document.getElementById('fishSprite')
+        const spriteShown = !!(sprite && sprite.hidden === false)
+        const imgShown = !!(img && !img.hidden && img.complete && img.naturalWidth > 0)
+        const svgShown = !!(svg && svg.style.display !== 'none')
+        // 序列帧 / 单张图 / 占位画，三层永远只显示一个
+        check('形象层只显示一个（序列帧/图片/占位画）',
+          (spriteShown ? 1 : 0) + (imgShown ? 1 : 0) + (svgShown ? 1 : 0) === 1,
+          'sprite=' + spriteShown + ' img=' + imgShown + ' svg=' + svgShown)
+        // 有图集时：确认真的把图集挂上了、还给了帧偏移（无图集时这层不出现，跳过）
+        if (spriteShown) {
+          check('序列帧挂的是 idle 图集', /dafeiyu_Idle\.webp/.test(sprite.style.backgroundImage || ''), sprite.style.backgroundImage)
+          check('序列帧已有 background-position 偏移', /^-?\d+px -?\d+px$/.test(sprite.style.backgroundPosition || ''), sprite.style.backgroundPosition)
+          check('序列帧在跑时占位画藏起来了', svg.style.display === 'none')
+        }
+      }, 400)
+      // ---- 19. 序列帧驱动（纯函数）：帧率 / 回绕 / 图集偏移 ----
+      const SP = D.FISH_SPRITE
+      check('图集网格与帧数对得上（8x6=48）', SP.cols * SP.rows === SP.frameCount, SP.cols + 'x' + SP.rows + '=' + SP.frameCount)
+      check('0 毫秒是第 0 帧', D.fishFrameAt(0) === 0, String(D.fishFrameAt(0)))
+      check('12fps 下 1000ms 是第 12 帧', D.fishFrameAt(1000) === 12, String(D.fishFrameAt(1000)))
+      check('4 秒整回绕到第 0 帧', D.fishFrameAt(4000) === 0, String(D.fishFrameAt(4000)))
+      check('回绕前一帧是第 47 帧', D.fishFrameAt(3999) === 47, String(D.fishFrameAt(3999)))
+      const o0 = D.fishSpriteOffset(0), o9 = D.fishSpriteOffset(9), o47 = D.fishSpriteOffset(47)
+      check('第 0 帧偏移是 (0,0)', o0.x === 0 && o0.y === 0, JSON.stringify(o0))
+      check('第 9 帧换到第二行第二列', o9.x === -60 && o9.y === -80, JSON.stringify(o9))
+      check('最后一帧在第八列第六行', o47.x === -420 && o47.y === -400, JSON.stringify(o47))
+      check('序列帧元素在 DOM 里（id=fishSprite，图集到了就接管显示）', !!document.getElementById('fishSprite'))
       D.showView('pair')
       check('配对页不显示悬浮小人', document.getElementById('fishFab').hidden === true)
       // 异步看图自测还要接着用 a1，把当前会话还回去

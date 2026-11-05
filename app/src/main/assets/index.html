@@ -93,15 +93,21 @@
   #fishFab{position:fixed;left:0;top:0;z-index:40;width:64px;height:64px;touch-action:none;
     user-select:none;-webkit-user-select:none}
   #fishFab[hidden]{display:none !important}
-  #fishBody{width:64px;height:64px;cursor:grab;filter:drop-shadow(0 6px 10px rgba(0,0,0,.45))}
+  #fishBody{width:64px;height:64px;cursor:grab;filter:drop-shadow(0 6px 10px rgba(0,0,0,.45));position:relative}
   #fishFab.drag #fishBody{cursor:grabbing}
   #fishFab .fishSvg{width:100%;height:100%;display:block;pointer-events:none}
   #fishFab .fishImg{width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
+  /* 真素材序列帧：单张图集 + background-position 逐帧推进（锚点 0.5,0 = 脚底中心对齐） */
+  #fishFab .fishSprite{position:absolute;left:50%;bottom:0;transform:translateX(-50%);
+    width:60px;height:80px;background-repeat:no-repeat;background-size:480px 480px;
+    display:block;pointer-events:none}
+  #fishFab .fishSprite[hidden]{display:none !important}
+  #fishFab.think .fishSprite{display:none !important}
   #fishFab.think #fishBody{animation:fishBob 1.05s ease-in-out infinite}
   #fishFab.away #fishBody{opacity:.55;filter:grayscale(.75)}
   #fishFab.drag #fishBody{filter:drop-shadow(0 10px 16px rgba(0,0,0,.55));animation:none}
   .fishEye{transform-origin:center;animation:fishBlink 4.4s ease-in-out infinite}
-  #fishBubble{position:absolute;right:0;bottom:66px;background:#23233a;border:1px solid #33334a;
+  #fishBubble{position:absolute;right:0;bottom:84px;background:#23233a;border:1px solid #33334a;
     color:#e8e8f0;font-size:12px;line-height:1.35;padding:7px 10px;border-radius:10px;white-space:nowrap;
     max-width:62vw;overflow:hidden;text-overflow:ellipsis;box-shadow:0 6px 18px rgba(0,0,0,.35)}
   #fishBubble.left{right:auto;left:0}
@@ -166,7 +172,8 @@
   <div id="fishFab" hidden>
     <div id="fishBubble" hidden></div>
     <div id="fishBody" role="button" aria-label="大肥鱼">
-      <!-- 真素材（鲸鱼娘帧图/idle.png 等）放进 assets/fish/ 就会盖住下面的占位画 -->
+      <!-- 真素材（鲸鱼娘序列帧/dafeiyu_Idle.webp 图集）放进 assets/fish/ 就会盖住下面的占位画 -->
+      <div id="fishSprite" class="fishSprite" hidden></div>
       <img id="fishImg" class="fishImg" hidden alt="">
       <svg class="fishSvg" viewBox="0 0 64 64" aria-hidden="true">
         <ellipse cx="30" cy="37" rx="19.5" ry="15" fill="#5b8cff"/>

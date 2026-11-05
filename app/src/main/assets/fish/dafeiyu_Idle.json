@@ -1,0 +1,20 @@
+{
+  "name": "dafeiyu_Idle",
+  "cols": 8,
+  "rows": 6,
+  "frameCount": 48,
+  "fps": 12,
+  "cellWidth": 256,
+  "cellHeight": 341,
+  "anchorX": 0.5,
+  "anchorY": 0.0,
+  "source": {
+    "file": "dafeiyu_Idle_8x6.png",
+    "cellWidth": 834,
+    "cellHeight": 1112,
+    "scale": 100.0,
+    "sourceName": "shot_01.mp4",
+    "sourceKind": "video"
+  },
+  "note": "网格切片后的 256px 图集；显示格 60x80，atlas 480x480；脏素材（尾巴三分叉）仅用于跑通动画驱动"
+}
