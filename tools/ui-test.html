@@ -413,7 +413,11 @@
       check('拖动后位置真的变了', (parseFloat(fab.style.left) || 0) > 20, fab.style.left)
       check('拖动不冒气泡', document.getElementById('fishBubble').hidden === true)
       setTimeout(() => {
-        check('没有真素材时继续用占位画', document.getElementById('fishImg').hidden === true)
+        const img = document.getElementById('fishImg')
+        const svg = document.querySelector('#fishBody .fishSvg')
+        const loaded = !!img && img.complete && img.naturalWidth > 0
+        // 有真素材就只显示图片、藏起占位画；没素材就反过来 —— 二者永远只出一个
+        check('占位画/真素材只显示一个', loaded ? (!img.hidden && svg.style.display === 'none') : (img.hidden && svg.style.display !== 'none'))
       }, 150)
       D.showView('pair')
       check('配对页不显示悬浮小人', document.getElementById('fishFab').hidden === true)

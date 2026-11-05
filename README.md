@@ -24,7 +24,7 @@
 app/src/main/java/.../MainActivity.java  # WebView 外壳
 app/src/main/assets/index.html            # 客户端界面
 app/src/main/assets/app.js                # 客户端逻辑（协议 + 加密）
-app/src/main/assets/fish/                 # 可选：悬浮小人的真形象（idle.png / think.png）
+app/src/main/assets/fish/                 # 悬浮小人形象（idle.png / think.png；现在是占位画导出的 PNG，换真图直接覆盖同名文件）
 tools/patch-plugin.mjs                    # 电脑端插件补丁（改名 / 模型清单 / 切模型）
 ```
 
