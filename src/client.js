@@ -142,6 +142,8 @@ const S = {
   newBusy: false,      // 正在新建会话（防连点）
   newBusyTimer: null,
   cfTimer: 0,          // 重新配对确认框的倒计时
+  nextBeforeSeq: undefined,  // 历史翻页游标（还有更早的一页时才有）
+  earlierBusy: false,        // 「加载更早」正在请求（防连点）
 }
 
 /* 模型选择按会话记在本地：重启 App 也能显示上次选的 */
@@ -166,7 +168,7 @@ function initEls() {
     'modelBtn', 'renameBtn', 'dlgWrap', 'dlgTitle', 'dlgInput', 'dlgOk', 'dlgCancel',
     'gearBtn', 'menuWrap', 'menuClose', 'confirmWrap', 'cfTitle', 'cfText', 'cfOk', 'cfCancel',
     'modelWrap', 'modelList', 'modelRefresh', 'modelClose',
-    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg']
+    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg', 'earlierWrap', 'earlierBtn']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -864,6 +866,41 @@ function renderModelSheet() {
   }
 }
 
+/**
+ * 历史第一页的条数。协议上限就是 200（`cmd.session_history.limit` 的 schema），
+ * 主机那边还有一条 10 万字符的页预算，超了会少给条目、但在 `nextBeforeSeq` 里
+ * 留一个「还有更早」的游标，所以这一页给不满也不用兜底逻辑。
+ */
+const HISTORY_PAGE_LIMIT = 200
+
+/** 组一条历史请求。纯函数，方便自测；`beforeSeq` 不传就是「最新一页」。 */
+function historyCmd(sessionId, beforeSeq) {
+  return {
+    t: 'cmd.session_history',
+    cmdId: nextCmdId(),
+    sessionId,
+    limit: HISTORY_PAGE_LIMIT,
+    ...(beforeSeq === undefined ? {} : { beforeSeq }),
+  }
+}
+
+/** 「加载更早」按钮的显隐跟着游标走；翻页请求在飞的时候先藏起来（防连点）。 */
+function syncEarlierBtn() {
+  const wrap = el.earlierWrap
+  if (!wrap) return
+  wrap.hidden = !S.nextBeforeSeq || S.earlierBusy
+}
+
+/** 点「加载更早」：带上主机给的游标，再要一页更早的。 */
+function loadEarlier() {
+  if (!S.current || S.earlierBusy || S.nextBeforeSeq === undefined) return
+  // 没连上就别发：发了也没人回，而按钮会因为 earlierBusy 一直藏着
+  if (!S.paired || !S.ws || S.ws.readyState !== 1) return
+  S.earlierBusy = true
+  syncEarlierBtn()
+  sendSealed(historyCmd(S.current, S.nextBeforeSeq))
+}
+
 function openSession(id, title) {
   S.current = id
   S.currentTitle = title || '对话'
@@ -872,12 +909,15 @@ function openSession(id, title) {
   S.cards = {}
   S.qSel = {}
   S.lastSent = null
+  S.nextBeforeSeq = undefined
+  S.earlierBusy = false
+  if (el.earlierWrap) el.earlierWrap.hidden = true
   showView('chat')
   renderMessages()
   renderSessions()
   refreshModelBadge()
   saveOpenSession(id, title || '')
-  sendSealed({ t: 'cmd.session_history', cmdId: nextCmdId(), sessionId: id, limit: 50 })
+  sendSealed(historyCmd(id))
   sendSealed({ t: 'cmd.get_pending', cmdId: nextCmdId(), sessionId: id })
 }
 
@@ -887,6 +927,9 @@ function goBack() {
   S.msgs = []
   S.cards = {}
   S.lastSent = null
+  S.nextBeforeSeq = undefined
+  S.earlierBusy = false
+  if (el.earlierWrap) el.earlierWrap.hidden = true
   clearOpenSession()
   showView('list')
   renderSessions()
@@ -1109,12 +1152,32 @@ function applyEvent(p) {
       break
     }
     case 'ev.session_history': {
-      if (!S.historyLoaded) { S.msgs = []; S.historyLoaded = true }
+      // 用户可能已经切到别的会话了：这一页对不上就不往当前列表里塞
+      if (p.sessionId && S.current && p.sessionId !== S.current) break
       const items = Array.isArray(p.items) ? p.items : []
+      const earlier = S.earlierBusy
+      const main = el.main
+      // 翻更早的页时，把回放进来的条目先装进一个临时列表，再拼到现有消息前面：
+      // 直接往 S.msgs 里塞会跑到末尾，而且和已经有的条目（翻页边界重叠）会重复。
+      const prevMsgs = earlier ? S.msgs : null
+      const prevHeight = earlier && main ? main.scrollHeight : 0
+      const prevTop = earlier && main ? main.scrollTop : 0
+      if (earlier) S.msgs = []
+      else if (!S.historyLoaded) { S.msgs = []; S.historyLoaded = true }
       S.replaying = true
       for (const it of items) applyEvent(it)
       S.replaying = false
+      if (earlier && prevMsgs) {
+        const seen = {}
+        for (const m of prevMsgs) seen[m.id] = true
+        S.msgs = S.msgs.filter((m) => !seen[m.id]).concat(prevMsgs)
+      }
+      S.nextBeforeSeq = typeof p.nextBeforeSeq === 'number' ? p.nextBeforeSeq : undefined
+      S.earlierBusy = false
       renderMessages()
+      syncEarlierBtn()
+      // 顶上插了一页，要还原来「看着同一行」的滚动位置，否则会瞬间跳到会话开头。
+      if (main && earlier) main.scrollTop = prevTop + (main.scrollHeight - prevHeight)
       break
     }
     case 'ev.todo': {
@@ -1231,7 +1294,7 @@ function handleFrame(f) {
           S.replaying = false
           showView('chat')
           renderMessages()
-          sendSealed({ t: 'cmd.session_history', cmdId: nextCmdId(), sessionId: S.current, limit: 50 })
+          sendSealed(historyCmd(S.current))
           sendSealed({ t: 'cmd.get_pending', cmdId: nextCmdId(), sessionId: S.current })
           cmdListSessions()
         } else {
@@ -1720,6 +1783,7 @@ function boot() {
   })
   el.backBtn?.addEventListener('click', goBack)
   el.sendBtn?.addEventListener('click', cmdSendPrompt)
+  el.earlierBtn?.addEventListener('click', loadEarlier)
   el.stopBtn?.addEventListener('click', cmdInterrupt)
   el.msgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cmdSendPrompt() })
 
@@ -1802,6 +1866,6 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishFrameAt, fishSpriteOffset, FISH_SPRITE }
+  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishFrameAt, fishSpriteOffset, FISH_SPRITE, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT }
 } catch (_) {}
 

@@ -66,6 +66,9 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #sessions .ws:first-child{margin-top:0}
   .muted{color:var(--dim);font-size:12px;line-height:1.6;margin:8px 0 0}
+  #earlierWrap{padding:2px 0 8px;text-align:center}
+  #earlierWrap[hidden]{display:none !important}
+  #earlierBtn{font-size:12px;opacity:.85}
   .msg{padding:9px 11px;border-radius:10px;margin-bottom:8px;font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
   .msg.assistant,.msg.system{background:#20202f;border:1px solid #2c2c42}
   .msg.user{background:#2b3a66;margin-left:16%}
@@ -151,6 +154,7 @@
     </section>
 
     <section id="chatView" hidden>
+      <div id="earlierWrap" hidden><button id="earlierBtn" class="ghost">↑ 加载更早的对话</button></div>
       <div id="messages"></div>
     </section>
 

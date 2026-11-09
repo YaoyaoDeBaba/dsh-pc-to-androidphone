@@ -60,6 +60,7 @@
 </div>
 
 <div id="chatView" hidden>
+  <div id="earlierWrap" hidden><button id="earlierBtn">加载更早</button></div>
   <div class="card" id="messages"></div>
   <footer id="composer" hidden>
     <input id="msgInput"><button id="sendBtn">发</button><button id="stopBtn">停</button>
@@ -446,6 +447,51 @@
       check('配对页不显示悬浮小人', document.getElementById('fishFab').hidden === true)
       // 异步看图自测还要接着用 a1，把当前会话还回去
       D.S.current = 'a1'
+
+      // ---- 20. 历史翻页：第一页 200 条、游标、去重、按序拼到前面 ----
+      // 用独立会话做，别把后面异步看图自测正在用的 a1 消息列表清掉
+      const savedMsgs = D.S.msgs
+      const savedCurrent = D.S.current
+      const savedLoaded = D.S.historyLoaded
+      D.S.current = 'hist-1'
+      D.S.historyLoaded = false
+      D.S.msgs = []
+      D.S.nextBeforeSeq = undefined
+      D.S.earlierBusy = false
+      D.applyEvent({
+        t: 'ev.session_history', sessionId: 'hist-1', cmdId: 'h0',
+        items: [{ t: 'ev.message_delta', sessionId: 'hist-1', messageId: 'hm1', role: 'assistant', delta: '第一页正文' }],
+        nextBeforeSeq: 90,
+      })
+      check('第一页到位', D.S.msgs.length === 1 && D.S.msgs[0].id === 'hm1', D.S.msgs.map(m => m.id).join(','))
+      check('有更早时出现「加载更早」', document.getElementById('earlierWrap').hidden === false)
+      check('游标记住了', D.S.nextBeforeSeq === 90, String(D.S.nextBeforeSeq))
+      const hc = D.historyCmd('hist-1', 90)
+      check('翻页命令带游标 + 200 条上限', hc.t === 'cmd.session_history' && hc.beforeSeq === 90 && hc.limit === 200, JSON.stringify({ beforeSeq: hc.beforeSeq, limit: hc.limit }))
+      check('第一页请求不带 beforeSeq', D.historyCmd('hist-1').beforeSeq === undefined, String(D.historyCmd('hist-1').beforeSeq))
+      check('每页条数就是 200', D.HISTORY_PAGE_LIMIT === 200, String(D.HISTORY_PAGE_LIMIT))
+      D.S.earlierBusy = true
+      D.applyEvent({
+        t: 'ev.session_history', sessionId: 'hist-1', cmdId: 'h1',
+        items: [
+          { t: 'ev.message_delta', sessionId: 'hist-1', messageId: 'hm0', role: 'assistant', delta: '更早的一页' },
+          { t: 'ev.message_delta', sessionId: 'hist-1', messageId: 'hm1', role: 'assistant', delta: '第一页正文' },
+        ],
+      })
+      check('更早的页拼到消息列表前面', D.S.msgs[0] && D.S.msgs[0].id === 'hm0', D.S.msgs.map(m => m.id).join(','))
+      check('翻页重叠的条目不会重复', D.S.msgs.filter(m => m.id === 'hm1').length === 1, String(D.S.msgs.length))
+      check('到底了（没有游标）按钮藏起来', document.getElementById('earlierWrap').hidden === true && D.S.earlierBusy === false)
+      // 切到别的会话时迟到的一页不许串台
+      D.S.current = 'other-session'
+      D.S.msgs = []
+      D.applyEvent({ t: 'ev.session_history', sessionId: 'hist-1', cmdId: 'h2', items: [{ t: 'ev.message_delta', sessionId: 'hist-1', messageId: 'late', role: 'assistant', delta: '串台' }] })
+      check('切了会话的迟到历史不串台', D.S.msgs.length === 0, String(D.S.msgs.length))
+      // 还原 a1 的消息列表给后面异步看图自测用
+      D.S.msgs = savedMsgs
+      D.S.current = savedCurrent
+      D.S.historyLoaded = savedLoaded
+      D.S.nextBeforeSeq = undefined
+      D.S.earlierBusy = false
 
       // ---- 17. 倒计时走完才解锁，确认后才真的断开 ----
       D.el.gearBtn.click()
