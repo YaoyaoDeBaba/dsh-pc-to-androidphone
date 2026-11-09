@@ -1364,6 +1364,7 @@ function applyEvent(p) {
       if (runningNow && !S.running[sid]) S.runStart[sid] = Date.now()
       if (!runningNow) delete S.runStart[sid]
       S.running[sid] = runningNow
+      fishSync()
       renderSessions()
       if (S.current === sid) setStatus(runningNow ? '运行中…' : '空闲', runningNow ? '#3ecf8e' : '#8a8aa0')
     } else if (S.current === null) {
@@ -1436,6 +1437,8 @@ function applyEvent(p) {
       if (deltaText) m.text += deltaText
       if (p.role) m.role = p.role
       if (p.done) m.done = true
+      S.fishTalkUntil = Date.now() + 2500
+      fishSync()
       scheduleRender()
       break
     }
@@ -1890,9 +1893,9 @@ function fishState() {
   if (!S.paired) return 'off'
   if (S.hostAway) return 'away'
   if (S.current && S.running[S.current]) return 'think'
+  if (S.fishTalkUntil && Date.now() < S.fishTalkUntil) return 'talk'
   return 'idle'
 }
-
 /*
  * 真素材挂载：
  *   1) assets/fish/dafeiyu_Idle.webp —— 序列帧图集（8 列 × 6 行 = 48 帧，12fps），idle 逐帧播放。
@@ -1901,35 +1904,34 @@ function fishState() {
  *   2) assets/fish/think.png —— 思考态单张静态图（可选）。
  * 都没有就退回内联 SVG 占位画，交互/状态不受影响。
  */
-const FISH_SPRITE = {
-  atlas: 'fish/dafeiyu_Idle.webp',
-  cols: 8, rows: 6, frameCount: 48, fps: 12,
-  cellWidth: 60, cellHeight: 80,       // 显示格；图集原始格 256×341，等比缩到 60×80
-  atlasWidth: 480, atlasHeight: 480,   // cols*cellWidth × rows*cellHeight
+const FISH_CELL = { w: 60, h: 80 }
+const FISH_SPRITES = {
+  idle: { file: 'fish/dafeiyu_Idle.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
+  think: { file: 'fish/dafeiyu_Think.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
+  talk: { file: 'fish/dafeiyu_Talk.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
 }
-const FISH_ART = { think: 'fish/think.png' }
-const fishArtReady = {}
-let fishSpriteReady = false
+let fishSpriteId = 'idle'
+const fishSpriteReady = {}
 let fishSpriteRaf = 0
 let fishSpriteStartedAt = 0
 
 /** 时间（毫秒）→ 帧号，纯函数，方便无头自测；到结尾回绕。 */
 function fishFrameAt(ms) {
-  const total = FISH_SPRITE.frameCount
-  const frame = Math.floor((ms / 1000) * FISH_SPRITE.fps)
+  const spec = FISH_SPRITES[fishSpriteId] || FISH_SPRITES.idle
+  const total = spec.frameCount
+  const frame = Math.floor((ms / 1000) * spec.fps)
   return ((frame % total) + total) % total
 }
-
 /** 帧号 → 图集里的 background-position，纯函数。 */
 function fishSpriteOffset(frame) {
-  const col = frame % FISH_SPRITE.cols
-  const row = Math.floor(frame / FISH_SPRITE.cols)
-  return { x: -col * FISH_SPRITE.cellWidth, y: -row * FISH_SPRITE.cellHeight }
+  const spec = FISH_SPRITES[fishSpriteId] || FISH_SPRITES.idle
+  const col = frame % spec.cols
+  const row = Math.floor(frame / spec.cols)
+  return { x: -col * FISH_CELL.w, y: -row * FISH_CELL.h }
 }
-
 function paintFishSpriteFrame(frame) {
   const sprite = el.fishSprite
-  if (!sprite || !fishSpriteReady) return
+  if (!sprite || !fishSpriteReady[(FISH_SPRITES[fishSpriteId] || FISH_SPRITES.idle).file]) return
   const p = fishSpriteOffset(frame)
   sprite.style.backgroundPosition = p.x + 'px ' + p.y + 'px'
 }
@@ -1940,7 +1942,7 @@ function stopFishSpriteLoop() {
 }
 
 function startFishSpriteLoop() {
-  if (fishSpriteRaf || !fishSpriteReady) return
+  if (fishSpriteRaf || !fishSpriteReady[(FISH_SPRITES[fishSpriteId] || FISH_SPRITES.idle).file]) return
   fishSpriteStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now())
   const tick = () => {
     const sprite = el.fishSprite
@@ -1955,45 +1957,34 @@ function startFishSpriteLoop() {
 function loadFishArt() {
   const check = (src) => new Promise((resolve) => {
     const probe = new Image()
-    probe.onload = () => { fishArtReady[src] = true; resolve(true) }
-    probe.onerror = () => { fishArtReady[src] = false; resolve(false) }
+    probe.onload = () => { fishSpriteReady[src] = true; resolve(true) }
+    probe.onerror = () => { fishSpriteReady[src] = false; resolve(false) }
     probe.src = src
   })
-  const checkSprite = new Promise((resolve) => {
-    const probe = new Image()
-    probe.onload = () => { fishSpriteReady = true; resolve(true) }
-    probe.onerror = () => { fishSpriteReady = false; resolve(false) }
-    probe.src = FISH_SPRITE.atlas
-  })
-  void Promise.all([checkSprite, check(FISH_ART.think)]).then(() => {
-    const sprite = el.fishSprite
-    if (fishSpriteReady && sprite) {
-      sprite.style.backgroundImage = 'url("' + FISH_SPRITE.atlas + '")'
-      sprite.style.backgroundSize = FISH_SPRITE.atlasWidth + 'px ' + FISH_SPRITE.atlasHeight + 'px'
-      paintFishSpriteFrame(0)
-    }
-    fishSync()
-  })
+  const jobs = Object.values(FISH_SPRITES).map((spec) => check(spec.file))
+  void Promise.all(jobs).then(() => { fishSync() })
 }
-
 function paintFishArt(state) {
   const sprite = el.fishSprite
   const img = el.fishImg
   const svg = el.fishBody && el.fishBody.querySelector('.fishSvg')
-  const spriteOn = state === 'idle' && fishSpriteReady
-  const imgOn = !spriteOn && state === 'think' && fishArtReady[FISH_ART.think] === true
+  const spec = FISH_SPRITES[state] || FISH_SPRITES.idle
+  fishSpriteId = FISH_SPRITES[state] ? state : 'idle'
+  const spriteOn = fishSpriteReady[spec.file] === true
   if (sprite) {
     sprite.hidden = !spriteOn
-    if (spriteOn) startFishSpriteLoop()
-    else { stopFishSpriteLoop(); sprite.style.backgroundPosition = '' }
+    if (spriteOn) {
+      sprite.style.backgroundImage = 'url("' + spec.file + '")'
+      sprite.style.backgroundSize = (spec.cols * FISH_CELL.w) + 'px ' + (spec.rows * FISH_CELL.h) + 'px'
+      startFishSpriteLoop()
+    } else {
+      stopFishSpriteLoop()
+      sprite.style.backgroundPosition = ''
+    }
   }
-  if (img) {
-    img.hidden = !imgOn
-    if (imgOn) img.src = FISH_ART.think
-  }
-  if (svg) svg.style.display = spriteOn || imgOn ? 'none' : ''
+  if (img) img.hidden = true
+  if (svg) svg.style.display = spriteOn ? 'none' : ''
 }
-
 function fishBubbleText() {
   if (!S.paired) return '还没连上电脑'
   if (S.hostAway) return '电脑暂时离线，等等它'
@@ -2010,7 +2001,7 @@ function fishSync() {
   const state = fishState()
   fab.classList.toggle('think', state === 'think')
   fab.classList.toggle('away', state === 'away')
-  paintFishArt(state === 'think' ? 'think' : 'idle')
+  paintFishArt(state === 'think' ? 'think' : state === 'talk' ? 'talk' : 'idle')
   if (el.fishBubble && !el.fishBubble.hidden) el.fishBubble.textContent = fishBubbleText()
 }
 
@@ -2197,6 +2188,6 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishFrameAt, fishSpriteOffset, FISH_SPRITE, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT, readCache, saveCache, updateRunBanner, syncStopBtn, renderSubPanel, fmtSpan, requestSubagents, closeSubPanel, toggleSubPanel, SUB_IDLE_WARN_MS }
+  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishState, fishFrameAt, fishSpriteOffset, FISH_SPRITES, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT, readCache, saveCache, updateRunBanner, syncStopBtn, renderSubPanel, fmtSpan, requestSubagents, closeSubPanel, toggleSubPanel, SUB_IDLE_WARN_MS }
 } catch (_) {}
 

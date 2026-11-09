@@ -400,6 +400,9 @@
       check('运行中会晃', fab.classList.contains('think') === true)
       D.applyEvent({ t: 'ev.run_state', sessionId: 'fish-1', state: 'idle' })
       check('跑完恢复空闲', fab.classList.contains('think') === false)
+      check('讲话窗口内切到 talk', (D.S.fishTalkUntil = Date.now() + 1500, D.fishState() === 'talk'), D.fishState())
+      D.S.fishTalkUntil = 0
+      check('讲话窗口过后回 idle', D.fishState() === 'idle', D.fishState())
       const fishBody = document.getElementById('fishBody')
       const down = new PointerEvent('pointerdown', { bubbles: true, clientX: 12, clientY: 12, pointerId: 7 })
       const up = new PointerEvent('pointerup', { bubbles: true, clientX: 12, clientY: 12, pointerId: 7 })
@@ -435,7 +438,7 @@
         }
       }, 400)
       // ---- 19. 序列帧驱动（纯函数）：帧率 / 回绕 / 图集偏移 ----
-      const SP = D.FISH_SPRITE
+      const SP = D.FISH_SPRITES.idle
       check('图集网格与帧数对得上（8x6=48）', SP.cols * SP.rows === SP.frameCount, SP.cols + 'x' + SP.rows + '=' + SP.frameCount)
       check('0 毫秒是第 0 帧', D.fishFrameAt(0) === 0, String(D.fishFrameAt(0)))
       check('12fps 下 1000ms 是第 12 帧', D.fishFrameAt(1000) === 12, String(D.fishFrameAt(1000)))
