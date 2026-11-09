@@ -142,6 +142,7 @@ const S = {
   newBusy: false,      // 正在新建会话（防连点）
   newBusyTimer: null,
   cfTimer: 0,          // 重新配对确认框的倒计时
+  runStart: {},              // 会话 id → 本轮开始时间（聊天页顶部的「深度求索中…」计时）
   nextBeforeSeq: undefined,  // 历史翻页游标（还有更早的一页时才有）
   earlierBusy: false,        // 「加载更早」正在请求（防连点）
 }
@@ -168,7 +169,7 @@ function initEls() {
     'modelBtn', 'renameBtn', 'dlgWrap', 'dlgTitle', 'dlgInput', 'dlgOk', 'dlgCancel',
     'gearBtn', 'menuWrap', 'menuClose', 'confirmWrap', 'cfTitle', 'cfText', 'cfOk', 'cfCancel',
     'modelWrap', 'modelList', 'modelRefresh', 'modelClose',
-    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg', 'earlierWrap', 'earlierBtn']
+    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg', 'earlierWrap', 'earlierBtn', 'runBanner', 'runText']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -224,6 +225,7 @@ function saveSession(pskBytes, conv) {
 }
 
 function clearSession() {
+  clearCaches()
   localStorage.removeItem('drc.psk')
   localStorage.removeItem('drc.conv')
   localStorage.removeItem('drc.seq')
@@ -449,6 +451,7 @@ function renderMessages() {
     el.messages.appendChild(renderCard(rid, card))
   }
   autoScroll()
+  scheduleCacheSave()
 }
 
 // 一个气泡里的「看图」部分：路径按钮 + 已经取到的图片。
@@ -901,11 +904,133 @@ function loadEarlier() {
   sendSealed(historyCmd(S.current, S.nextBeforeSeq))
 }
 
+/* ================= 会话缓存（本地先显示，再向主机刷新） ================= */
+/*
+ * 从列表点进一条会话时，先拿 localStorage 里上次见过的消息把列表铺出来
+ * （离线也看得到），再发 cmd.session_history 让主机把最新一页盖回来。
+ * 上限按会话条数 + 总字符双闸：单条消息最长 2 万字，只按条数算能把 5MB 配额打满。
+ */
+const CACHE_PREFIX = 'drc.cache.'
+const CACHE_MAX_SESSIONS = 6
+const CACHE_MAX_MSGS = 300
+const CACHE_MAX_CHARS = 300_000
+let cacheTimer = 0
+let runTicker = 0
+
+function cacheKey(id) { return CACHE_PREFIX + id }
+
+function readCache(id) {
+  try {
+    const raw = localStorage.getItem(cacheKey(id))
+    if (!raw) return null
+    const box = JSON.parse(raw)
+    if (!box || !Array.isArray(box.msgs)) return null
+    return box
+  } catch (_) { return null }
+}
+
+/** 存一份会话快照：只留最近的、非工具行的消息，超字符预算就从最旧开始丢。 */
+function saveCache(id, msgs) {
+  if (!id || !Array.isArray(msgs)) return
+  const keep = []
+  let chars = 0
+  for (let i = msgs.length - 1; i >= 0 && keep.length < CACHE_MAX_MSGS; i--) {
+    const m = msgs[i]
+    if (!m || m.kind === 'tool') continue
+    const text = String(m.text || '')
+    if (chars + text.length > CACHE_MAX_CHARS && keep.length > 0) break
+    keep.unshift(m)
+    chars += text.length
+  }
+  const box = { at: Date.now(), msgs: keep }
+  try {
+    localStorage.setItem(cacheKey(id), JSON.stringify(box))
+    pruneCaches(id, false)
+  } catch (_) {
+    // 配额满了：先清别人的缓存，再存一次自己的
+    pruneCaches(id, true)
+    try { localStorage.setItem(cacheKey(id), JSON.stringify(box)) } catch (_) {}
+  }
+}
+
+function pruneCaches(keepId, wipeOthers) {
+  try {
+    if (typeof localStorage.key !== 'function') return
+    const rows = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (!k || k.indexOf(CACHE_PREFIX) !== 0 || k === cacheKey(keepId)) continue
+      let at = 0
+      try { const b = JSON.parse(localStorage.getItem(k)); at = (b && b.at) || 0 } catch (_) {}
+      rows.push({ k, at })
+    }
+    if (wipeOthers) { for (const r of rows) localStorage.removeItem(r.k); return }
+    if (rows.length < CACHE_MAX_SESSIONS) return
+    rows.sort((a, b) => a.at - b.at)
+    while (rows.length >= CACHE_MAX_SESSIONS) { const r = rows.shift(); if (r) localStorage.removeItem(r.k) }
+  } catch (_) {}
+}
+
+function clearCaches() {
+  try {
+    if (typeof localStorage.key !== 'function') return
+    const keys = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && k.indexOf(CACHE_PREFIX) === 0) keys.push(k)
+    }
+    for (const k of keys) localStorage.removeItem(k)
+  } catch (_) {}
+}
+
+function scheduleCacheSave() {
+  if (!S.current) return
+  // 记下"这条消息属于哪个会话"：500ms 内用户切了会话，不能把新会话的列表写进旧会话的缓存
+  const id = S.current
+  clearTimeout(cacheTimer)
+  cacheTimer = setTimeout(() => { if (S.current === id) saveCache(id, S.msgs) }, 500)
+}
+
+/* ================= 运行状态条 + 停止键（灰/亮） ================= */
+function fmtElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0')
+}
+
+/** 当前会话在跑就显示「深度求索中… m:ss」并每秒刷新；不跑就藏起来。 */
+function updateRunBanner() {
+  const box = el.runBanner
+  const txt = el.runText
+  if (!box || !txt) return
+  const running = !!(S.current && S.running[S.current])
+  if (!running) {
+    box.hidden = true
+    if (runTicker) { clearInterval(runTicker); runTicker = 0 }
+    return
+  }
+  const started = S.runStart[S.current] || Date.now()
+  box.hidden = false
+  txt.textContent = '深度求索中… ' + fmtElapsed(Date.now() - started)
+  if (!runTicker) runTicker = setInterval(updateRunBanner, 1000)
+}
+
+/** 「停」只在当前会话运行中才亮着，空闲时灰掉（灰了也不能点）。 */
+function syncStopBtn() {
+  const btn = el.stopBtn
+  if (!btn) return
+  const running = !!(S.current && S.running[S.current])
+  btn.disabled = !running
+  btn.classList.toggle('stopOn', running)
+  btn.title = running ? '中断本轮' : '当前没有在跑的任务'
+}
+
 function openSession(id, title) {
   S.current = id
   S.currentTitle = title || '对话'
-  S.msgs = []
-  S.historyLoaded = false
+  // 先铺本地缓存：断网/慢网也能立刻看到上次的内容；主机那一页回来后会整页覆盖
+  const cached = readCache(id)
+  S.msgs = cached && Array.isArray(cached.msgs) ? cached.msgs : []
+  S.historyLoaded = !!(cached && S.msgs.length)
   S.cards = {}
   S.qSel = {}
   S.lastSent = null
@@ -914,6 +1039,8 @@ function openSession(id, title) {
   if (el.earlierWrap) el.earlierWrap.hidden = true
   showView('chat')
   renderMessages()
+  updateRunBanner()
+  syncStopBtn()
   renderSessions()
   refreshModelBadge()
   saveOpenSession(id, title || '')
@@ -1043,12 +1170,18 @@ function applyEvent(p) {
   // 运行态用 sessionId 维护徽标
   if (t === 'ev.run_state') {
     if (sid) {
-      S.running[sid] = p.state === 'running'
+      const runningNow = p.state === 'running'
+      // 第一次看到 running 才记开始时间：反复的 running 帧不能把计时器重置
+      if (runningNow && !S.running[sid]) S.runStart[sid] = Date.now()
+      if (!runningNow) delete S.runStart[sid]
+      S.running[sid] = runningNow
       renderSessions()
-      if (S.current === sid) setStatus(p.state === 'running' ? '运行中…' : '空闲', p.state === 'running' ? '#3ecf8e' : '#8a8aa0')
+      if (S.current === sid) setStatus(runningNow ? '运行中…' : '空闲', runningNow ? '#3ecf8e' : '#8a8aa0')
     } else if (S.current === null) {
       setStatus(p.state === 'running' ? '运行中…' : '空闲', p.state === 'running' ? '#3ecf8e' : '#8a8aa0')
     }
+    updateRunBanner()
+    syncStopBtn()
     return
   }
 
@@ -1162,11 +1295,16 @@ function applyEvent(p) {
       const prevMsgs = earlier ? S.msgs : null
       const prevHeight = earlier && main ? main.scrollHeight : 0
       const prevTop = earlier && main ? main.scrollTop : 0
+      const pendingKeep = earlier ? [] : S.msgs.filter((m) => m.pending)
       if (earlier) S.msgs = []
-      else if (!S.historyLoaded) { S.msgs = []; S.historyLoaded = true }
+      else { S.msgs = []; S.historyLoaded = true }
       S.replaying = true
       for (const it of items) applyEvent(it)
       S.replaying = false
+      if (!earlier) {
+        // 刚发出去、主机还没回执的那条不能被历史页吞掉
+        for (const m of pendingKeep) if (!S.msgs.some((x) => x.id === m.id)) S.msgs.push(m)
+      }
       if (earlier && prevMsgs) {
         const seen = {}
         for (const m of prevMsgs) seen[m.id] = true
@@ -1848,6 +1986,7 @@ function boot() {
   })
 
   setStatus('未连接')
+  syncStopBtn()
   log('客户端已加载，中继: ' + S.relay)
 
   if (loadSession()) {
@@ -1866,6 +2005,6 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishFrameAt, fishSpriteOffset, FISH_SPRITE, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT }
+  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishFrameAt, fishSpriteOffset, FISH_SPRITE, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT, readCache, saveCache, updateRunBanner, syncStopBtn }
 } catch (_) {}
 

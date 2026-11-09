@@ -60,6 +60,7 @@
 </div>
 
 <div id="chatView" hidden>
+  <div id="runBanner" hidden><span class="pulse"></span><span id="runText">深度求索中…</span></div>
   <div id="earlierWrap" hidden><button id="earlierBtn">加载更早</button></div>
   <div class="card" id="messages"></div>
   <footer id="composer" hidden>
@@ -491,6 +492,43 @@
       D.S.current = savedCurrent
       D.S.historyLoaded = savedLoaded
       D.S.nextBeforeSeq = undefined
+      D.S.earlierBusy = false
+
+      // ---- 21. 会话缓存：进会话先用本地快照，主机页回来后覆盖；排队中的气泡不被吞 ----
+      D.S.msgs = []
+      D.S.historyLoaded = false
+      D.saveCache('cache-1', [{ id: 'c1', kind: 'msg', role: 'assistant', text: '缓存里的上一轮' }])
+      const cachedBox = D.readCache('cache-1')
+      check('缓存读得回来', !!cachedBox && cachedBox.msgs.length === 1 && cachedBox.msgs[0].id === 'c1', cachedBox ? String(cachedBox.msgs.length) : 'null')
+      D.S.current = null
+      D.openSession('cache-1', '缓存会话')
+      check('进会话先显示缓存', D.S.msgs.length === 1 && D.S.msgs[0].text === '缓存里的上一轮', String(D.S.msgs.length))
+      check('有缓存时不再显示「加载中…」', document.getElementById('messages').textContent.indexOf('加载中') < 0)
+      D.S.msgs.push({ id: 'pend-1', kind: 'msg', role: 'user', text: '刚发出去的话', pending: true })
+      D.applyEvent({ t: 'ev.session_history', sessionId: 'cache-1', cmdId: 'c0', items: [{ t: 'ev.message_delta', sessionId: 'cache-1', messageId: 's1', role: 'assistant', delta: '主机最新一页' }] })
+      check('主机回页后以主机页为准', D.S.msgs.some(m => m.id === 's1') && D.S.msgs.length === 2, D.S.msgs.map(m => m.id).join(','))
+      check('主机页不吞掉排队中的气泡', D.S.msgs.some(m => m.id === 'pend-1'))
+      check('缓存按会话隔离', D.readCache('another-session') === null)
+
+      // ---- 22. 运行状态条 + 停止键灰/亮 ----
+      D.S.current = 'run-1'
+      D.S.running = {}
+      D.S.runStart = {}
+      D.updateRunBanner()
+      D.syncStopBtn()
+      check('空闲时「停」是灰的', document.getElementById('stopBtn').disabled === true, String(document.getElementById('stopBtn').disabled))
+      check('空闲时不显示运行条', document.getElementById('runBanner').hidden === true)
+      D.applyEvent({ t: 'ev.run_state', sessionId: 'run-1', state: 'running' })
+      check('运行中出现「深度求索中…」', document.getElementById('runBanner').hidden === false && textOf('runText').indexOf('深度求索中') >= 0, textOf('runText'))
+      check('运行条带计时（m:ss）', /^深度求索中… \d+:\d\d$/.test(textOf('runText')), textOf('runText'))
+      check('运行中「停」亮了', document.getElementById('stopBtn').disabled === false && document.getElementById('stopBtn').classList.contains('stopOn'))
+      D.applyEvent({ t: 'ev.run_state', sessionId: 'run-1', state: 'idle' })
+      check('跑完运行条收起', document.getElementById('runBanner').hidden === true)
+      check('跑完「停」重新变灰', document.getElementById('stopBtn').disabled === true && !document.getElementById('stopBtn').classList.contains('stopOn'))
+      // 还原给后面的用例
+      D.S.msgs = savedMsgs
+      D.S.current = savedCurrent
+      D.S.historyLoaded = savedLoaded
       D.S.earlierBusy = false
 
       // ---- 17. 倒计时走完才解锁，确认后才真的断开 ----
