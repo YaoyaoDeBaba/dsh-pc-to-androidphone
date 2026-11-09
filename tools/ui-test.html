@@ -73,7 +73,7 @@
 
 <!-- 悬浮大肥鱼（占位形象）的骨架 -->
 <button id="subFab" hidden>🐝<span id="subCount" hidden></span></button>
-<div id="subPanel" hidden><div class="subHead"><span>子代理监视器</span><button id="subClose">关闭</button></div><div id="subList"></div></div>
+<div id="subPanel" hidden><div class="subHead"><span>子代理监视器</span><span><button id="subArchiveIdle" hidden>一键归档</button><button id="subClose">关闭</button></span></div><div id="subList"></div></div>
 <div id="fishFab" hidden><div id="fishBubble" hidden></div><div id="fishBody"><div id="fishSprite" hidden></div><img id="fishImg" hidden alt=""><svg class="fishSvg" viewBox="0 0 64 64"></svg></div></div>
 
 <div id="dlgWrap" hidden>
@@ -533,31 +533,43 @@
       D.S.historyLoaded = savedLoaded
       D.S.earlierBusy = false
 
-      // ---- 23. 子代理监视器：角标、行、闲置标黄 + 归档、回执分流 ----
+      // ---- 23. 子代理监视器：名称/简述/活动/互斥时间/命名标黄/一键归档 ----
       D.S.current = 'sub-1'
       D.S.view = 'chat'
       D.S.subItems = [
-        { id: 'c1', status: 'running', title: '跑测试', workMs: 65000, idleMs: 1000 },
-        { id: 'c2', status: 'idle', title: '', task: '整理文档', workMs: 3600000, idleMs: 3 * 3600 * 1000 },
+        {
+          id: 'c1', status: 'running', name: '渲染合批', summary: '升级 VFX 批次合并并跑通验收',
+          activity: '运行 Bash', runningMs: 65000, idleMs: 1000, naming: 'ok', workMs: 65000,
+        },
+        {
+          id: 'c2', status: 'idle', name: '没按格式写的名字', naming: 'fallback',
+          task: '整理文档', workMs: 3600000, idleMs: 3 * 3600 * 1000,
+        },
       ]
       D.renderSubPanel()
       check('有子代理时出现 🐝 图标', document.getElementById('subFab').hidden === false)
       check('角标显示子代理数量', document.getElementById('subCount').textContent === '2', document.getElementById('subCount').textContent)
-      check('列表渲染两行', document.querySelectorAll('#subList .subRow').length === 2)
-      check('闲置超 2 小时标黄并给归档按钮', document.querySelectorAll('#subList .subMeta.stale').length === 1 && document.querySelectorAll('#subList .subActs button').length === 1)
-      check('任务文本替代空标题', document.getElementById('subList').textContent.indexOf('整理文档') >= 0)
-      check('时长格式 m:ss', D.fmtSpan(65000) === '1m05s', D.fmtSpan(65000))
-      check('时长格式 h:mm', D.fmtSpan(3 * 3600 * 1000) === '3h00m', D.fmtSpan(3 * 3600 * 1000))
-      // 回执分流：ev.result 带 items 且 cmdId 匹配 → 落到子代理列表而不是别的分支
+      const subRows = document.querySelectorAll('#subList .subRow')
+      check('列表渲染两行', subRows.length === 2)
+      check('名称来自 label（不是整段 prompt）', subRows[0].textContent.indexOf('渲染合批') >= 0)
+      check('简述显示在行里', subRows[0].textContent.indexOf('升级 VFX 批次合并并跑通验收') >= 0)
+      check('运行中显示「运行」不显示「闲置」', /运行中 · 运行 1m05s/.test(subRows[0].textContent) && subRows[0].textContent.indexOf('闲置') < 0, subRows[0].textContent)
+      check('显示「正在：运行 Bash」', subRows[0].textContent.indexOf('正在：运行 Bash') >= 0)
+      check('未按格式的行标黄', subRows[1].querySelector('.subWarn') !== null)
+      check('空闲行显示「闲置」', /空闲 · 闲置/.test(subRows[1].textContent), subRows[1].textContent)
+      check('每行都有归档按钮（非运行中）', document.querySelectorAll('#subList .subActs button').length === 1)
+      check('一键归档按钮显示闲置数量', document.getElementById('subArchiveIdle').hidden === false && document.getElementById('subArchiveIdle').textContent.indexOf('1') >= 0, document.getElementById('subArchiveIdle').textContent)
+      // 回执分流：ev.result 带 items 且 cmdId 匹配 → 落到子代理列表
       D.S.subCmd = 'sub-cmd-1'
       D.S.subBusy = true
-      D.applyEvent({ t: 'ev.result', ok: true, cmdId: 'sub-cmd-1', data: { items: [{ id: 'c9', status: 'idle', title: '后来派的一个', workMs: 1000, idleMs: 2000 }] } })
-      check('回执落到子代理列表', D.S.subItems.length === 1 && D.S.subItems[0].id === 'c9', String(D.S.subItems.length))
+      D.applyEvent({ t: 'ev.result', ok: true, cmdId: 'sub-cmd-1', data: { items: [{ id: 'c9', status: 'idle', name: '后来派的一个', idleMs: 2000 }] } })
+      check('回执落到子代理列表（带 name 字段）', D.S.subItems.length === 1 && D.S.subItems[0].name === '后来派的一个', String(D.S.subItems.length))
       check('回执把请求标志清掉', D.S.subCmd === '' && D.S.subBusy === false)
       D.S.subItems = []
       D.renderSubPanel()
       check('没有子代理时图标藏起来', document.getElementById('subFab').hidden === true)
-      D.S.subItems = [{ id: 'cx', status: 'running', title: 'x' }]
+      check('没有闲置时一键归档按钮藏起来', document.getElementById('subArchiveIdle').hidden === true)
+      D.S.subItems = [{ id: 'cx', status: 'running', name: 'x', runningMs: 1000, idleMs: 0 }]
       D.renderSubPanel()
       D.closeSubPanel()
       check('关闭面板后隐藏', document.getElementById('subPanel').hidden === true)

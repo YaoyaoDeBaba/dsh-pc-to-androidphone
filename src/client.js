@@ -174,7 +174,7 @@ function initEls() {
     'modelBtn', 'renameBtn', 'dlgWrap', 'dlgTitle', 'dlgInput', 'dlgOk', 'dlgCancel',
     'gearBtn', 'menuWrap', 'menuClose', 'confirmWrap', 'cfTitle', 'cfText', 'cfOk', 'cfCancel',
     'modelWrap', 'modelList', 'modelRefresh', 'modelClose',
-    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg', 'earlierWrap', 'earlierBtn', 'runBanner', 'runText', 'subFab', 'subCount', 'subPanel', 'subList', 'subClose']
+    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg', 'earlierWrap', 'earlierBtn', 'runBanner', 'runText', 'subFab', 'subCount', 'subPanel', 'subList', 'subClose', 'subArchiveIdle']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -1079,24 +1079,41 @@ function renderSubPanel() {
     dot.className = 'subDot' + (row.status === 'running' ? ' run' : '')
     const name = document.createElement('span')
     name.className = 'subName'
-    name.textContent = row.title || row.task || String(row.id || '').slice(0, 12)
+    // 名称优先级：官方 label 的「名称」→ 标题 → 任务首行 → id
+    name.textContent = row.name || row.title || row.task || String(row.id || '').slice(0, 12)
     top.appendChild(dot)
     top.appendChild(name)
+    if (row.naming === 'fallback') {
+      const warn = document.createElement('span')
+      warn.className = 'subWarn'
+      warn.textContent = '⚠ 命名不合规'
+      warn.title = '派活时 description 应按「名称｜一句话简述」填写'
+      top.appendChild(warn)
+    }
     box.appendChild(top)
     const stale = row.status === 'idle' && (row.idleMs || 0) >= SUB_IDLE_WARN_MS
     const meta = document.createElement('div')
     meta.className = 'subMeta' + (stale ? ' stale' : '')
-    meta.textContent = (row.status === 'running' ? '运行中' : '空闲')
-      + ' · 工作 ' + fmtSpan(row.workMs) + ' · 闲置 ' + fmtSpan(row.idleMs)
-      + (stale ? ' · 建议清理' : '')
+    // 运行 / 闲置互斥：跑着只看运行时长，停了只看闲置时长
+    const time = row.status === 'running'
+      ? '运行 ' + fmtSpan(row.runningMs != null ? row.runningMs : row.workMs)
+      : '闲置 ' + fmtSpan(row.idleMs)
+    meta.textContent = (row.status === 'running' ? '运行中' : '空闲') + ' · ' + time + (stale ? ' · 建议归档' : '')
     box.appendChild(meta)
-    if (row.task && row.task !== name.textContent) {
-      const task = document.createElement('div')
-      task.className = 'subTask'
-      task.textContent = row.task
-      box.appendChild(task)
+    const summary = row.summary || (row.task && row.task !== name.textContent ? row.task : '')
+    if (summary) {
+      const text = document.createElement('div')
+      text.className = 'subTask'
+      text.textContent = summary
+      box.appendChild(text)
     }
-    if (stale) {
+    if (row.status === 'running' && row.activity) {
+      const act = document.createElement('div')
+      act.className = 'subAct'
+      act.textContent = '正在：' + row.activity
+      box.appendChild(act)
+    }
+    if (row.status !== 'running') {
       const acts = document.createElement('div')
       acts.className = 'subActs'
       const btn = document.createElement('button')
@@ -1107,6 +1124,24 @@ function renderSubPanel() {
     }
     list.appendChild(box)
   }
+  if (el.subArchiveIdle) {
+    const idleCount = S.subItems.filter((row) => row.status !== 'running' && (row.idleMs || 0) >= SUB_IDLE_WARN_MS).length
+    el.subArchiveIdle.hidden = idleCount === 0
+    el.subArchiveIdle.textContent = '一键归档 (' + idleCount + ')'
+  }
+}
+
+/** 批量归档：把所有闲置 ≥2h 的子代理逐条发 archive 命令。 */
+function archiveIdleSubagents() {
+  const ids = S.subItems
+    .filter((row) => row.status !== 'running' && (row.idleMs || 0) >= SUB_IDLE_WARN_MS)
+    .map((row) => row.id)
+  if (!ids.length) return
+  for (const id of ids) {
+    sendSealed({ t: 'cmd.archive_session', cmdId: nextCmdIdFor('archive'), sessionId: id, archived: true })
+  }
+  if (el.subArchiveIdle) el.subArchiveIdle.textContent = '归档中…'
+  setTimeout(requestSubagents, 1500)
 }
 
 function archiveSubagent(id, btn) {
@@ -2072,6 +2107,7 @@ function boot() {
   el.earlierBtn?.addEventListener('click', loadEarlier)
   el.subFab?.addEventListener('click', toggleSubPanel)
   el.subClose?.addEventListener('click', closeSubPanel)
+  el.subArchiveIdle?.addEventListener('click', archiveIdleSubagents)
   el.stopBtn?.addEventListener('click', cmdInterrupt)
   el.msgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cmdSendPrompt() })
 

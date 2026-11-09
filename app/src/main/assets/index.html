@@ -73,6 +73,9 @@
   #subFab #subCount{position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;
     background:#5b8cff;color:#fff;font-size:10px;line-height:16px}
   #subFab #subCount[hidden]{display:none !important}
+  .subHead span{display:inline-flex;gap:6px;align-items:center}
+  .subWarn{color:#e0a83a;font-size:11px;margin-left:4px}
+  .subAct{color:#8fd6c3;margin-top:3px;line-height:1.45}
   #subPanel{position:fixed;left:8px;right:8px;bottom:150px;z-index:42;max-height:56vh;overflow:auto;
     background:#1c1c2a;border:1px solid #33334a;border-radius:12px;padding:10px 12px;box-shadow:0 10px 26px rgba(0,0,0,.45)}
   #subPanel[hidden]{display:none !important}
@@ -205,7 +208,7 @@
   <!-- 子代理监视器：当前对话有子代理时才出现（手机端） -->
   <button id="subFab" hidden title="子代理监视器">🐝<span id="subCount" hidden></span></button>
   <div id="subPanel" hidden>
-    <div class="subHead"><span>子代理监视器</span><button id="subClose" class="ghost">关闭</button></div>
+    <div class="subHead"><span>子代理监视器</span><span><button id="subArchiveIdle" class="ghost" hidden>一键归档</button><button id="subClose" class="ghost">关闭</button></span></div>
     <div id="subList"></div>
     <div class="subFoot">闲置超过 2 小时的子代理可以归档（可恢复），不会删数据。</div>
   </div>
