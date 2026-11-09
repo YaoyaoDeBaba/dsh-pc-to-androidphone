@@ -143,6 +143,11 @@ const S = {
   newBusyTimer: null,
   cfTimer: 0,          // 重新配对确认框的倒计时
   runStart: {},              // 会话 id → 本轮开始时间（聊天页顶部的「深度求索中…」计时）
+  subItems: [],              // 当前对话的子代理快照（cmd.list_subagents 回执）
+  subCmd: '',                // 正在等的子代理列表 cmdId
+  subTimer: 0,               // 轮询计时器
+  subOpen: false,            // 监视器面板是否展开
+  subBusy: false,            // 列表请求在飞（防连点）
   nextBeforeSeq: undefined,  // 历史翻页游标（还有更早的一页时才有）
   earlierBusy: false,        // 「加载更早」正在请求（防连点）
 }
@@ -169,7 +174,7 @@ function initEls() {
     'modelBtn', 'renameBtn', 'dlgWrap', 'dlgTitle', 'dlgInput', 'dlgOk', 'dlgCancel',
     'gearBtn', 'menuWrap', 'menuClose', 'confirmWrap', 'cfTitle', 'cfText', 'cfOk', 'cfCancel',
     'modelWrap', 'modelList', 'modelRefresh', 'modelClose',
-    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg', 'earlierWrap', 'earlierBtn', 'runBanner', 'runText']
+    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg', 'earlierWrap', 'earlierBtn', 'runBanner', 'runText', 'subFab', 'subCount', 'subPanel', 'subList', 'subClose']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -294,6 +299,8 @@ function showView(name) {
   el.chatView.hidden = name !== 'chat'
   el.logCard.hidden = !S.logOpen   // 日志栏展开/收起由用户决定，换页不重置
   el.composer.hidden = name !== 'chat'
+  if (name === 'chat' && S.current) startSubPoll()
+  else { stopSubPoll(); S.subItems = []; closeSubPanel(); if (el.subFab) el.subFab.hidden = true }
   el.backBtn.hidden = name !== 'chat'
   if (el.title) el.title.textContent = name === 'chat' ? (S.currentTitle || '对话') : '大肥鱼远控'
   if (el.renameBtn) el.renameBtn.hidden = name !== 'chat'
@@ -991,6 +998,130 @@ function scheduleCacheSave() {
   cacheTimer = setTimeout(() => { if (S.current === id) saveCache(id, S.msgs) }, 500)
 }
 
+/* ================= 子代理监视器（手机端） ================= */
+/*
+ * 当前对话有子代理时，输入框上方出现一颗 🐝 小图标；点开是一个只读面板：
+ * 任务标题 / 运行-空闲 / 工作时长 / 闲置时长，闲置超过 2 小时给「归档」按钮
+ * （归档是会话级的可恢复操作，走已有的 cmd.archive_session）。
+ *
+ * 数据每 5 秒拉一次（`cmd.list_subagents`），面板关着也拉——图标上的数字要一直对。
+ * 进入/离开对话、重连时都会重新拉/停掉，不留下空转的计时器。
+ */
+const SUB_IDLE_WARN_MS = 2 * 60 * 60 * 1000
+const SUB_POLL_MS = 5_000
+
+/** 毫秒 → 「2h05m / 3m12s / 45s」，负数/缺值显示 —。 */
+function fmtSpan(ms) {
+  if (typeof ms !== 'number' || !isFinite(ms) || ms <= 0) return '—'
+  const total = Math.floor(ms / 1000)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const sec = total % 60
+  if (h > 0) return h + 'h' + String(m).padStart(2, '0') + 'm'
+  if (m > 0) return m + 'm' + String(sec).padStart(2, '0') + 's'
+  return sec + 's'
+}
+
+function requestSubagents() {
+  if (!S.current || !S.paired || !S.ws || S.ws.readyState !== 1) return
+  if (S.subBusy) return
+  S.subBusy = true
+  const cmdId = nextCmdIdFor('subagents')
+  S.subCmd = cmdId
+  sendSealed({ t: 'cmd.list_subagents', cmdId, sessionId: S.current })
+}
+
+function stopSubPoll() {
+  if (S.subTimer) clearInterval(S.subTimer)
+  S.subTimer = 0
+  S.subBusy = false
+  S.subCmd = ''
+}
+
+function startSubPoll() {
+  stopSubPoll()
+  if (!S.current) return
+  requestSubagents()
+  S.subTimer = setInterval(requestSubagents, SUB_POLL_MS)
+}
+
+function closeSubPanel() {
+  S.subOpen = false
+  if (el.subPanel) el.subPanel.hidden = true
+}
+
+function toggleSubPanel() {
+  S.subOpen = !S.subOpen
+  if (el.subPanel) el.subPanel.hidden = !S.subOpen
+  if (S.subOpen) requestSubagents()
+}
+
+function renderSubPanel() {
+  const fab = el.subFab
+  const list = el.subList
+  const visible = !!S.current && S.subItems.length > 0 && S.view === 'chat'
+  if (fab) {
+    fab.hidden = !visible
+    if (el.subCount) {
+      el.subCount.hidden = !visible
+      el.subCount.textContent = String(S.subItems.length)
+    }
+  }
+  if (!visible && S.subOpen) closeSubPanel()
+  if (!list) return
+  list.textContent = ''
+  for (const row of S.subItems) {
+    const box = document.createElement('div')
+    box.className = 'subRow'
+    const top = document.createElement('div')
+    top.className = 'subTop'
+    const dot = document.createElement('span')
+    dot.className = 'subDot' + (row.status === 'running' ? ' run' : '')
+    const name = document.createElement('span')
+    name.className = 'subName'
+    name.textContent = row.title || row.task || String(row.id || '').slice(0, 12)
+    top.appendChild(dot)
+    top.appendChild(name)
+    box.appendChild(top)
+    const stale = row.status === 'idle' && (row.idleMs || 0) >= SUB_IDLE_WARN_MS
+    const meta = document.createElement('div')
+    meta.className = 'subMeta' + (stale ? ' stale' : '')
+    meta.textContent = (row.status === 'running' ? '运行中' : '空闲')
+      + ' · 工作 ' + fmtSpan(row.workMs) + ' · 闲置 ' + fmtSpan(row.idleMs)
+      + (stale ? ' · 建议清理' : '')
+    box.appendChild(meta)
+    if (row.task && row.task !== name.textContent) {
+      const task = document.createElement('div')
+      task.className = 'subTask'
+      task.textContent = row.task
+      box.appendChild(task)
+    }
+    if (stale) {
+      const acts = document.createElement('div')
+      acts.className = 'subActs'
+      const btn = document.createElement('button')
+      btn.textContent = '归档'
+      btn.addEventListener('click', () => archiveSubagent(row.id, btn))
+      acts.appendChild(btn)
+      box.appendChild(acts)
+    }
+    list.appendChild(box)
+  }
+}
+
+function archiveSubagent(id, btn) {
+  if (!id) return
+  btn.disabled = true
+  btn.textContent = '归档中…'
+  sendSealed({ t: 'cmd.archive_session', cmdId: nextCmdIdFor('archive'), sessionId: id, archived: true })
+  // 归档回执没有专属 kind：给足一拍后刷新一次列表（失败也会自然回到旧状态）
+  setTimeout(() => {
+    btn.disabled = false
+    btn.textContent = '归档'
+    requestSubagents()
+  }, 1200)
+}
+
 /* ================= 运行状态条 + 停止键（灰/亮） ================= */
 function fmtElapsed(ms) {
   const total = Math.max(0, Math.floor(ms / 1000))
@@ -1046,6 +1177,7 @@ function openSession(id, title) {
   saveOpenSession(id, title || '')
   sendSealed(historyCmd(id))
   sendSealed({ t: 'cmd.get_pending', cmdId: nextCmdId(), sessionId: id })
+  startSubPoll()
 }
 
 function goBack() {
@@ -1057,6 +1189,10 @@ function goBack() {
   S.nextBeforeSeq = undefined
   S.earlierBusy = false
   if (el.earlierWrap) el.earlierWrap.hidden = true
+  stopSubPoll()
+  S.subItems = []
+  closeSubPanel()
+  if (el.subFab) el.subFab.hidden = true
   clearOpenSession()
   showView('list')
   renderSessions()
@@ -1095,6 +1231,18 @@ function applyEvent(p) {
     return
   }
   if (t === 'ev.result') {
+    // 子代理列表的回执：一对一，先在这里结算，别落到下面的功能分流里
+    if (S.subCmd && p.cmdId === S.subCmd) {
+      S.subCmd = ''
+      S.subBusy = false
+      const data = p.data && typeof p.data === 'object' ? p.data : {}
+      if (p.ok === false) {
+        log('[子代理] ' + String(p.message || '列表读取失败').slice(0, 60))
+      }
+      S.subItems = Array.isArray(data.items) ? data.items : []
+      renderSubPanel()
+      return
+    }
     // 看图的回执走这里结算：它是 a 请求/回执 一对一，不能落到下面那套「按功能名分流」的分支里
     const imgWaiter = S.imgWaiters[p.cmdId]
     if (imgWaiter) {
@@ -1922,6 +2070,8 @@ function boot() {
   el.backBtn?.addEventListener('click', goBack)
   el.sendBtn?.addEventListener('click', cmdSendPrompt)
   el.earlierBtn?.addEventListener('click', loadEarlier)
+  el.subFab?.addEventListener('click', toggleSubPanel)
+  el.subClose?.addEventListener('click', closeSubPanel)
   el.stopBtn?.addEventListener('click', cmdInterrupt)
   el.msgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cmdSendPrompt() })
 
@@ -2005,6 +2155,6 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishFrameAt, fishSpriteOffset, FISH_SPRITE, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT, readCache, saveCache, updateRunBanner, syncStopBtn }
+  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishFrameAt, fishSpriteOffset, FISH_SPRITE, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT, readCache, saveCache, updateRunBanner, syncStopBtn, renderSubPanel, fmtSpan, requestSubagents, closeSubPanel, toggleSubPanel, SUB_IDLE_WARN_MS }
 } catch (_) {}
 

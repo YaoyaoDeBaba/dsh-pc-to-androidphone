@@ -72,6 +72,8 @@
 <div id="main"></div>
 
 <!-- 悬浮大肥鱼（占位形象）的骨架 -->
+<button id="subFab" hidden>🐝<span id="subCount" hidden></span></button>
+<div id="subPanel" hidden><div class="subHead"><span>子代理监视器</span><button id="subClose">关闭</button></div><div id="subList"></div></div>
 <div id="fishFab" hidden><div id="fishBubble" hidden></div><div id="fishBody"><div id="fishSprite" hidden></div><img id="fishImg" hidden alt=""><svg class="fishSvg" viewBox="0 0 64 64"></svg></div></div>
 
 <div id="dlgWrap" hidden>
@@ -530,6 +532,38 @@
       D.S.current = savedCurrent
       D.S.historyLoaded = savedLoaded
       D.S.earlierBusy = false
+
+      // ---- 23. 子代理监视器：角标、行、闲置标黄 + 归档、回执分流 ----
+      D.S.current = 'sub-1'
+      D.S.view = 'chat'
+      D.S.subItems = [
+        { id: 'c1', status: 'running', title: '跑测试', workMs: 65000, idleMs: 1000 },
+        { id: 'c2', status: 'idle', title: '', task: '整理文档', workMs: 3600000, idleMs: 3 * 3600 * 1000 },
+      ]
+      D.renderSubPanel()
+      check('有子代理时出现 🐝 图标', document.getElementById('subFab').hidden === false)
+      check('角标显示子代理数量', document.getElementById('subCount').textContent === '2', document.getElementById('subCount').textContent)
+      check('列表渲染两行', document.querySelectorAll('#subList .subRow').length === 2)
+      check('闲置超 2 小时标黄并给归档按钮', document.querySelectorAll('#subList .subMeta.stale').length === 1 && document.querySelectorAll('#subList .subActs button').length === 1)
+      check('任务文本替代空标题', document.getElementById('subList').textContent.indexOf('整理文档') >= 0)
+      check('时长格式 m:ss', D.fmtSpan(65000) === '1m05s', D.fmtSpan(65000))
+      check('时长格式 h:mm', D.fmtSpan(3 * 3600 * 1000) === '3h00m', D.fmtSpan(3 * 3600 * 1000))
+      // 回执分流：ev.result 带 items 且 cmdId 匹配 → 落到子代理列表而不是别的分支
+      D.S.subCmd = 'sub-cmd-1'
+      D.S.subBusy = true
+      D.applyEvent({ t: 'ev.result', ok: true, cmdId: 'sub-cmd-1', data: { items: [{ id: 'c9', status: 'idle', title: '后来派的一个', workMs: 1000, idleMs: 2000 }] } })
+      check('回执落到子代理列表', D.S.subItems.length === 1 && D.S.subItems[0].id === 'c9', String(D.S.subItems.length))
+      check('回执把请求标志清掉', D.S.subCmd === '' && D.S.subBusy === false)
+      D.S.subItems = []
+      D.renderSubPanel()
+      check('没有子代理时图标藏起来', document.getElementById('subFab').hidden === true)
+      D.S.subItems = [{ id: 'cx', status: 'running', title: 'x' }]
+      D.renderSubPanel()
+      D.closeSubPanel()
+      check('关闭面板后隐藏', document.getElementById('subPanel').hidden === true)
+      D.S.current = savedCurrent
+      D.S.view = 'chat'
+      D.S.subItems = []
 
       // ---- 17. 倒计时走完才解锁，确认后才真的断开 ----
       D.el.gearBtn.click()
