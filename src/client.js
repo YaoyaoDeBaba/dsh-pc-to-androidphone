@@ -1007,7 +1007,9 @@ function scheduleCacheSave() {
  * 数据每 5 秒拉一次（`cmd.list_subagents`），面板关着也拉——图标上的数字要一直对。
  * 进入/离开对话、重连时都会重新拉/停掉，不留下空转的计时器。
  */
-const SUB_IDLE_WARN_MS = 2 * 60 * 60 * 1000
+const SUB_IDLE_WARN_DEFAULT_MS = 2 * 60 * 60 * 1000
+/** 闲置阈值：由宿主配置（设置页「派活助手」）下发，缺省 2h。 */
+let SUB_IDLE_WARN_MS = SUB_IDLE_WARN_DEFAULT_MS
 const SUB_POLL_MS = 5_000
 
 /** 毫秒 → 「2h05m / 3m12s / 45s」，负数/缺值显示 —。 */
@@ -1275,6 +1277,10 @@ function applyEvent(p) {
         log('[子代理] ' + String(p.message || '列表读取失败').slice(0, 60))
       }
       S.subItems = Array.isArray(data.items) ? data.items : []
+      // 阈值由宿主配置下发（PC 设置页「派活助手」里改，手机侧跟着走）
+      if (data.config && typeof data.config.idleWarnMs === 'number' && isFinite(data.config.idleWarnMs)) {
+        SUB_IDLE_WARN_MS = data.config.idleWarnMs
+      }
       renderSubPanel()
       return
     }
