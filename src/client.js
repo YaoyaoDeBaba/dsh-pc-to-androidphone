@@ -714,6 +714,21 @@ function cmdListSessions() {
   sendSealed({ t: 'cmd.list_sessions', cmdId: nextCmdId() })
 }
 
+/**
+ * 配对/重连后“拉会话列表”是**一次性**请求：帧丢了（刚配对时 socket 切换、relay 抖动）
+ * 就永远停在加载中。这里在没拿到列表时每 2.5 秒重发，最多 5 次。
+ */
+let sessionListRetry = 0
+function ensureSessionList(tries = 0) {
+  if (S.sessions.length > 0 || tries >= 5) return
+  if (!S.paired) return
+  setTimeout(() => {
+    if (!S.paired || S.sessions.length > 0) return
+    cmdListSessions()
+    ensureSessionList(tries + 1)
+  }, 2500)
+}
+
 /* ================= 新建会话（指定工作区） ================= */
 // 同工作区里已经有一个空的（没标题、没在跑）会话时，直接进去，别再建新的 ——
 // 否则连点几次 ＋ 就会在列表里堆一堆「新会话」
@@ -1658,6 +1673,7 @@ function handleFrame(f) {
           sendSealed(historyCmd(S.current))
           sendSealed({ t: 'cmd.get_pending', cmdId: nextCmdId(), sessionId: S.current })
           cmdListSessions()
+          ensureSessionList()
         } else {
           // 页面重载/App 重进：上次开着会话就回到那条，别一进来就是列表
           const saved = loadOpenSession()
@@ -1671,6 +1687,7 @@ function handleFrame(f) {
             renderSessions()
           }
           cmdListSessions()
+          ensureSessionList()
         }
         // 5 秒看门狗：重连后没有任何数据，提示一下（不销毁会话，避免误判）
         setTimeout(() => {
@@ -1808,6 +1825,7 @@ function tryFinishPairing() {
   showView('list')
   renderSessions()
   cmdListSessions()
+  ensureSessionList()
   sendSealed({ t: 'cmd.get_pending', cmdId: nextCmdId() })
 }
 
