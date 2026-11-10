@@ -1945,11 +1945,32 @@ const FISH_SPRITES = {
   idle: { file: 'fish/dafeiyu_Idle.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
   think: { file: 'fish/dafeiyu_Think.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
   talk: { file: 'fish/dafeiyu_Talk.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
+  nap: { file: 'fish/dafeiyu_Nap.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
+  eat: { file: 'fish/dafeiyu_EatRice.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
   tsundere: { file: 'fish/dafeiyu_Tsundere.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
   dance: { file: 'fish/dafeiyu_Dance.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
 }
 let fishSpriteId = 'idle'
 const fishSpriteReady = {}
+const FISH_POOLS = {
+  idle: [
+    { id: 'idle', weight: 60, loops: 2 },
+    { id: 'nap', weight: 25, loops: 2 },
+    { id: 'eat', weight: 15, loops: 1 },
+  ],
+  think: [
+    { id: 'think', weight: 60, loops: 1 },
+    { id: 'eat', weight: 25, loops: 1 },
+  ],
+  talk: [
+    { id: 'talk', weight: 65, loops: 1 },
+    { id: 'dance', weight: 20, loops: 1 },
+    { id: 'tsundere', weight: 15, loops: 1 },
+  ],
+}
+let fishStateKey = ''
+let fishClipId = ''
+let fishClipUntil = 0
 let fishSpriteRaf = 0
 let fishSpriteStartedAt = 0
 
@@ -2047,16 +2068,39 @@ function fishSync() {
   const state = fishState()
   fab.classList.toggle('think', state === 'think')
   fab.classList.toggle('away', state === 'away')
-  const spriteId =
-    state === 'think' ? 'think'
-    : state === 'talk' ? 'talk'
-    : state === 'poke' ? 'tsundere'
-    : state === 'done' ? 'dance'
-    : 'idle'
+
+  let spriteId
+  if (state === 'poke') {
+    spriteId = 'tsundere'
+  } else if (state === 'done') {
+    spriteId = 'dance'
+  } else {
+    if (state !== fishStateKey) {
+      fishStateKey = state
+      fishClipUntil = 0
+    }
+    const now = Date.now()
+    if (!fishClipId || now >= fishClipUntil) {
+      const pool = FISH_POOLS[state] || FISH_POOLS.idle
+      const options = pool.filter((entry) => FISH_SPRITES[entry.id])
+      const fresh = options.filter((entry) => entry.id !== fishClipId)
+      const use = fresh.length > 0 ? fresh : options
+      const total = use.reduce((sum, entry) => sum + (entry.weight || 1), 0)
+      let roll = Math.random() * total
+      let pick = use[0]
+      for (const entry of use) {
+        roll -= entry.weight || 1
+        if (roll <= 0) { pick = entry; break }
+      }
+      fishClipId = pick.id
+      const spec = FISH_SPRITES[pick.id]
+      fishClipUntil = now + (pick.loops || 1) * (spec.frameCount / spec.fps) * 1000
+    }
+    spriteId = fishClipId
+  }
   paintFishArt(spriteId)
   if (el.fishBubble && !el.fishBubble.hidden) el.fishBubble.textContent = fishBubbleText()
 }
-
 function fishSay(toggle) {
   if (!el.fishBubble || !el.fishFab || el.fishFab.hidden) return
   el.fishBubble.textContent = fishBubbleText()
@@ -2128,6 +2172,11 @@ function initFish() {
     S.liveCmd = id
     sendSealed({ t: 'cmd.list_sessions', cmdId: id })
   }, 2000)
+  // 每 400ms 重算一次：动作播完换下一个、talk/done 窗口过期后自动回落
+  setInterval(() => {
+    if (!S.paired || S.view === 'pair' || !el.fishFab || el.fishFab.hidden) return
+    fishSync()
+  }, 400)
 }
 
 function boot() {
@@ -2248,6 +2297,6 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishState, fishFrameAt, fishSpriteOffset, FISH_SPRITES, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT, readCache, saveCache, updateRunBanner, syncStopBtn, renderSubPanel, fmtSpan, requestSubagents, closeSubPanel, toggleSubPanel, SUB_IDLE_WARN_MS }
+  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishState, FISH_POOLS, fishFrameAt, fishSpriteOffset, FISH_SPRITES, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT, readCache, saveCache, updateRunBanner, syncStopBtn, renderSubPanel, fmtSpan, requestSubagents, closeSubPanel, toggleSubPanel, SUB_IDLE_WARN_MS }
 } catch (_) {}
 

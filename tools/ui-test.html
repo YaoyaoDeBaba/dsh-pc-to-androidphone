@@ -405,6 +405,9 @@
       check('讲话窗口内切到 talk', (D.S.fishTalkUntil = Date.now() + 1500, D.fishState() === 'talk'), D.fishState())
       D.S.fishTalkUntil = 0
       check('讲话窗口过后回 idle', D.fishState() === 'idle', D.fishState())
+      check('待机池至少 2 个动作', (D.FISH_POOLS.idle || []).length >= 2, String((D.FISH_POOLS.idle || []).length))
+      check('干活池至少 2 个动作', (D.FISH_POOLS.think || []).length >= 2, String((D.FISH_POOLS.think || []).length))
+      check('交付池至少 2 个动作', (D.FISH_POOLS.talk || []).length >= 2, String((D.FISH_POOLS.talk || []).length))
       D.S.fishPokeUntil = Date.now() + 1000
       check('点按后进入 poke', D.fishState() === 'poke', D.fishState())
       D.S.fishPokeUntil = 0
