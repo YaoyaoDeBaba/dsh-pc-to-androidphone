@@ -397,19 +397,34 @@
       check('配对后悬浮小人出现', fab && fab.hidden === false)
       check('空闲时不晃', fab.classList.contains('think') === false)
       D.applyEvent({ t: 'ev.run_state', sessionId: 'fish-1', state: 'running' })
-      check('运行中会晃', fab.classList.contains('think') === true)
+      check('运行中会晃', fab.classList.contains('think') === true, 'state=' + D.fishState() + ' running=' + String(D.S.running['fish-1']))
       D.applyEvent({ t: 'ev.run_state', sessionId: 'fish-1', state: 'idle' })
       check('跑完恢复空闲', fab.classList.contains('think') === false)
+      check('跑完先播 done 窗口', D.fishState() === 'done', D.fishState())
+      D.S.fishDoneUntil = 0
       check('讲话窗口内切到 talk', (D.S.fishTalkUntil = Date.now() + 1500, D.fishState() === 'talk'), D.fishState())
       D.S.fishTalkUntil = 0
       check('讲话窗口过后回 idle', D.fishState() === 'idle', D.fishState())
+      D.S.fishPokeUntil = Date.now() + 1000
+      check('点按后进入 poke', D.fishState() === 'poke', D.fishState())
+      D.S.fishPokeUntil = 0
+      D.S.fishDoneUntil = Date.now() + 1000
+      check('跑完的 done 窗口', D.fishState() === 'done', D.fishState())
+      D.S.fishDoneUntil = 0
+      D.S.running['fish-1'] = true
+      D.S.fishAnswerUntil = Date.now() + 1000
+      check('运行中且刚收到回复 → talk', D.fishState() === 'talk', D.fishState())
+      D.S.fishAnswerUntil = 0
+      check('运行中没有回复 → think', D.fishState() === 'think', D.fishState())
+      D.S.running['fish-1'] = false
+      check('停下后回 idle', D.fishState() === 'idle', D.fishState())
       const fishBody = document.getElementById('fishBody')
       const down = new PointerEvent('pointerdown', { bubbles: true, clientX: 12, clientY: 12, pointerId: 7 })
       const up = new PointerEvent('pointerup', { bubbles: true, clientX: 12, clientY: 12, pointerId: 7 })
       fishBody.dispatchEvent(down)
       fishBody.dispatchEvent(up)
       check('点一下冒出小气泡', document.getElementById('fishBubble').hidden === false)
-      check('气泡里写了状态', document.getElementById('fishBubble').textContent.indexOf('空闲') >= 0, document.getElementById('fishBubble').textContent)
+      check('气泡里写了状态', /气泡|戳|戳不|唔/.test(document.getElementById('fishBubble').textContent), document.getElementById('fishBubble').textContent)
       document.getElementById('fishBubble').hidden = true
       localStorage.removeItem('drc.fishPos')
       fishBody.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 20, pointerId: 8 }))

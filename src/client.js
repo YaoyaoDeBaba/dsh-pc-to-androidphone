@@ -145,7 +145,12 @@ const S = {
   runStart: {},              // 会话 id → 本轮开始时间（聊天页顶部的「深度求索中…」计时）
   subItems: [],              // 当前对话的子代理快照（cmd.list_subagents 回执）
   subCmd: '',                // 正在等的子代理列表 cmdId
-  subTimer: 0,               // 轮询计时器
+  subTimer: 0,
+  fishTalkUntil: 0,
+  fishPokeUntil: 0,
+  fishAnswerUntil: 0,
+  fishDoneUntil: 0,
+  liveCmd: '',               // 轮询计时器
   subOpen: false,            // 监视器面板是否展开
   subBusy: false,            // 列表请求在飞（防连点）
   nextBeforeSeq: undefined,  // 历史翻页游标（还有更早的一页时才有）
@@ -1269,6 +1274,21 @@ function applyEvent(p) {
   }
   if (t === 'ev.result') {
     // 子代理列表的回执：一对一，先在这里结算，别落到下面的功能分流里
+    if (S.liveCmd && p.cmdId === S.liveCmd) {
+      S.liveCmd = ''
+      delete S.cmdNames[p.cmdId]
+      const liveData = p.data && typeof p.data === 'object' ? p.data : {}
+      const list = Array.isArray(liveData.sessions) ? liveData.sessions : []
+      const cur = list.find((row) => row && row.id === S.current)
+      if (cur && typeof cur.state === 'string') {
+        const runningNow = cur.state === 'running'
+        const wasRunning = !!S.running[S.current]
+        S.running[S.current] = runningNow
+        if (wasRunning && !runningNow) S.fishDoneUntil = Date.now() + 2500
+        fishSync()
+      }
+      return
+    }
     if (S.subCmd && p.cmdId === S.subCmd) {
       S.subCmd = ''
       S.subBusy = false
@@ -1363,7 +1383,17 @@ function applyEvent(p) {
       // 第一次看到 running 才记开始时间：反复的 running 帧不能把计时器重置
       if (runningNow && !S.running[sid]) S.runStart[sid] = Date.now()
       if (!runningNow) delete S.runStart[sid]
+      const wasRunning = !!S.running[sid]
       S.running[sid] = runningNow
+      if (!wasRunning && runningNow) {
+        // 新一轮开始：清掉上一轮的“回答中/完成”窗口，否则会串状态
+        S.fishAnswerUntil = 0
+        S.fishDoneUntil = 0
+      }
+      if (wasRunning && !runningNow) {
+        S.fishDoneUntil = Date.now() + 2500
+        if (S.current === sid) S.fishAnswerUntil = 0
+      }
       fishSync()
       renderSessions()
       if (S.current === sid) setStatus(runningNow ? '运行中…' : '空闲', runningNow ? '#3ecf8e' : '#8a8aa0')
@@ -1438,6 +1468,7 @@ function applyEvent(p) {
       if (p.role) m.role = p.role
       if (p.done) m.done = true
       S.fishTalkUntil = Date.now() + 2500
+      S.fishAnswerUntil = Date.now() + 3000
       fishSync()
       scheduleRender()
       break
@@ -1892,11 +1923,16 @@ function placeFish(x, y, persist) {
 function fishState() {
   if (!S.paired) return 'off'
   if (S.hostAway) return 'away'
-  if (S.current && S.running[S.current]) return 'think'
-  if (S.fishTalkUntil && Date.now() < S.fishTalkUntil) return 'talk'
+  const now = Date.now()
+  if (S.fishPokeUntil && now < S.fishPokeUntil) return 'poke'
+  if (S.current && S.running[S.current]) {
+    if (S.fishAnswerUntil && now < S.fishAnswerUntil) return 'talk'
+    return 'think'
+  }
+  if (S.fishDoneUntil && now < S.fishDoneUntil) return 'done'
+  if (S.fishTalkUntil && now < S.fishTalkUntil) return 'talk'
   return 'idle'
-}
-/*
+}/*
  * 真素材挂载：
  *   1) assets/fish/dafeiyu_Idle.webp —— 序列帧图集（8 列 × 6 行 = 48 帧，12fps），idle 逐帧播放。
  *      网格与锚点来自 unity 精灵图工坊导出的 meta.json（anchorX 0.5 / anchorY 0.0 = 脚底中心），
@@ -1909,6 +1945,8 @@ const FISH_SPRITES = {
   idle: { file: 'fish/dafeiyu_Idle.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
   think: { file: 'fish/dafeiyu_Think.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
   talk: { file: 'fish/dafeiyu_Talk.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
+  tsundere: { file: 'fish/dafeiyu_Tsundere.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
+  dance: { file: 'fish/dafeiyu_Dance.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
 }
 let fishSpriteId = 'idle'
 const fishSpriteReady = {}
@@ -1987,11 +2025,14 @@ function paintFishArt(state) {
 }
 function fishBubbleText() {
   if (!S.paired) return '还没连上电脑'
-  if (S.hostAway) return '电脑暂时离线，等等它'
-  const busy = !!(S.current && S.running[S.current])
-  return (S.current ? (S.currentTitle || '对话') + '：' : '') + (busy ? '在回话…' : '空闲')
+  if (S.hostAway) return '主机暂时离线，等等吧'
+  const state = fishState()
+  if (state === 'poke') return '唔…别戳啦'
+  if (state === 'think') return '思考中…'
+  if (state === 'talk') return '在回答啦'
+  if (state === 'done') return '答完啦'
+  return '空闲'
 }
-
 function fishSync() {
   const fab = el.fishFab
   if (!fab) return
@@ -2001,7 +2042,13 @@ function fishSync() {
   const state = fishState()
   fab.classList.toggle('think', state === 'think')
   fab.classList.toggle('away', state === 'away')
-  paintFishArt(state === 'think' ? 'think' : state === 'talk' ? 'talk' : 'idle')
+  const spriteId =
+    state === 'think' ? 'think'
+    : state === 'talk' ? 'talk'
+    : state === 'poke' ? 'tsundere'
+    : state === 'done' ? 'dance'
+    : 'idle'
+  paintFishArt(spriteId)
   if (el.fishBubble && !el.fishBubble.hidden) el.fishBubble.textContent = fishBubbleText()
 }
 
@@ -2060,6 +2107,8 @@ function initFish() {
       placeFish(parseFloat(fab.style.left) || 0, parseFloat(fab.style.top) || 0, true)
       return
     }
+    S.fishPokeUntil = Date.now() + 1800
+    fishSync()
     fishSay(true)
   }
   body.addEventListener('pointerdown', down)
@@ -2068,6 +2117,12 @@ function initFish() {
   body.addEventListener('pointercancel', () => { fishDrag = null; fab.classList.remove('drag') })
   fab.hidden = true
   fishSync()
+  setInterval(() => {
+    if (!S.paired || S.view !== 'chat' || !S.current) return
+    const id = nextCmdIdFor('live_state')
+    S.liveCmd = id
+    sendSealed({ t: 'cmd.list_sessions', cmdId: id })
+  }, 2000)
 }
 
 function boot() {
