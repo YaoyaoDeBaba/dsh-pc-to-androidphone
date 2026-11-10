@@ -456,9 +456,9 @@
       const SP = D.FISH_SPRITES.idle
       check('图集网格与帧数对得上（8x6=48）', SP.cols * SP.rows === SP.frameCount, SP.cols + 'x' + SP.rows + '=' + SP.frameCount)
       check('0 毫秒是第 0 帧', D.fishFrameAt(0) === 0, String(D.fishFrameAt(0)))
-      check('12fps 下 1000ms 是第 12 帧', D.fishFrameAt(1000) === 12, String(D.fishFrameAt(1000)))
-      check('4 秒整回绕到第 0 帧', D.fishFrameAt(4000) === 0, String(D.fishFrameAt(4000)))
-      check('回绕前一帧是第 47 帧', D.fishFrameAt(3999) === 47, String(D.fishFrameAt(3999)))
+      check('24fps 下 1000ms 是第 24 帧', D.fishFrameAt(1000) === 24, String(D.fishFrameAt(1000)))
+      check('2 秒整回绕到第 0 帧', D.fishFrameAt(2000) === 0, String(D.fishFrameAt(2000)))
+      check('回绕前一帧是第 47 帧', D.fishFrameAt(1999) === 47, String(D.fishFrameAt(1999)))
       const o0 = D.fishSpriteOffset(0), o9 = D.fishSpriteOffset(9), o47 = D.fishSpriteOffset(47)
       check('第 0 帧偏移是 (0,0)', o0.x === 0 && o0.y === 0, JSON.stringify(o0))
       check('第 9 帧换到第二行第二列', o9.x === -60 && o9.y === -80, JSON.stringify(o9))

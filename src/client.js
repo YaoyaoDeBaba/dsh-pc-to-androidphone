@@ -1942,11 +1942,11 @@ function fishState() {
  */
 const FISH_CELL = { w: 60, h: 80 }
 const FISH_SPRITES = {
-  idle: { file: 'fish/dafeiyu_Idle.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
-  think: { file: 'fish/dafeiyu_Think.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
-  talk: { file: 'fish/dafeiyu_Talk.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
-  tsundere: { file: 'fish/dafeiyu_Tsundere.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
-  dance: { file: 'fish/dafeiyu_Dance.webp', cols: 8, rows: 6, frameCount: 48, fps: 12 },
+  idle: { file: 'fish/dafeiyu_Idle.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
+  think: { file: 'fish/dafeiyu_Think.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
+  talk: { file: 'fish/dafeiyu_Talk.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
+  tsundere: { file: 'fish/dafeiyu_Tsundere.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
+  dance: { file: 'fish/dafeiyu_Dance.webp', cols: 8, rows: 6, frameCount: 48, fps: 24 },
 }
 let fishSpriteId = 'idle'
 const fishSpriteReady = {}
@@ -1982,11 +1982,16 @@ function stopFishSpriteLoop() {
 function startFishSpriteLoop() {
   if (fishSpriteRaf || !fishSpriteReady[(FISH_SPRITES[fishSpriteId] || FISH_SPRITES.idle).file]) return
   fishSpriteStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  let lastFrame = -1
   const tick = () => {
     const sprite = el.fishSprite
     if (!sprite || sprite.hidden) { fishSpriteRaf = 0; return }
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
-    paintFishSpriteFrame(fishFrameAt(now - fishSpriteStartedAt))
+    const frame = fishFrameAt(now - fishSpriteStartedAt)
+    if (frame !== lastFrame) {
+      lastFrame = frame
+      paintFishSpriteFrame(frame)
+    }
     fishSpriteRaf = requestAnimationFrame(tick)
   }
   fishSpriteRaf = requestAnimationFrame(tick)
