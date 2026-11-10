@@ -577,6 +577,8 @@
       check('运行中显示「运行」不显示「闲置」', /运行中 · 运行 1m05s/.test(subRows[0].textContent) && subRows[0].textContent.indexOf('闲置') < 0, subRows[0].textContent)
       check('显示「正在：运行 Bash」', subRows[0].textContent.indexOf('正在：运行 Bash') >= 0)
       check('未按格式的行标黄', subRows[1].querySelector('.subWarn') !== null)
+      check('未命名行显示 子代理N', subRows[1].textContent.indexOf('子代理') >= 0, subRows[1].textContent)
+      check('未按要求填写占位', subRows[1].textContent.indexOf('未按要求填写') >= 0, subRows[1].textContent)
       check('空闲行显示「闲置」', /空闲 · 闲置/.test(subRows[1].textContent), subRows[1].textContent)
       check('每行都有归档按钮（非运行中）', document.querySelectorAll('#subList .subActs button').length === 1)
       check('一键归档按钮显示闲置数量', document.getElementById('subArchiveIdle').hidden === false && document.getElementById('subArchiveIdle').textContent.indexOf('1') >= 0, document.getElementById('subArchiveIdle').textContent)

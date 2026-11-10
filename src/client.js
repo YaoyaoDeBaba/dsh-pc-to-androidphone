@@ -1077,7 +1077,7 @@ function renderSubPanel() {
   if (!visible && S.subOpen) closeSubPanel()
   if (!list) return
   list.textContent = ''
-  for (const row of S.subItems) {
+  for (const [rowIndex, row] of S.subItems.entries()) {
     const box = document.createElement('div')
     box.className = 'subRow'
     const top = document.createElement('div')
@@ -1087,7 +1087,7 @@ function renderSubPanel() {
     const name = document.createElement('span')
     name.className = 'subName'
     // 名称优先级：官方 label 的「名称」→ 标题 → 任务首行 → id
-    name.textContent = row.name || row.title || row.task || String(row.id || '').slice(0, 12)
+    name.textContent = (row.naming === 'ok' && row.name) ? row.name : ('子代理' + (rowIndex + 1))
     top.appendChild(dot)
     top.appendChild(name)
     if (row.naming === 'fallback') {
@@ -1107,7 +1107,7 @@ function renderSubPanel() {
       : '闲置 ' + fmtSpan(row.idleMs)
     meta.textContent = (row.status === 'running' ? '运行中' : '空闲') + ' · ' + time + (stale ? ' · 建议归档' : '')
     box.appendChild(meta)
-    const summary = row.summary || (row.task && row.task !== name.textContent ? row.task : '')
+    const summary = row.summary || '未按要求填写'
     if (summary) {
       const text = document.createElement('div')
       text.className = 'subTask'
