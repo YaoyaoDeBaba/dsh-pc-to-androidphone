@@ -2171,7 +2171,7 @@ function initFish() {
     const id = nextCmdIdFor('live_state')
     S.liveCmd = id
     sendSealed({ t: 'cmd.list_sessions', cmdId: id })
-  }, 2000)
+  }, 5000)
   // 每 400ms 重算一次：动作播完换下一个、talk/done 窗口过期后自动回落
   setInterval(() => {
     if (!S.paired || S.view === 'pair' || !el.fishFab || el.fishFab.hidden) return
