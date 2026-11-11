@@ -143,7 +143,10 @@ const S = {
   newBusyTimer: null,
   cfTimer: 0,          // 重新配对确认框的倒计时
   runStart: {},              // 会话 id → 本轮开始时间（聊天页顶部的「深度求索中…」计时）
-  subItems: [],              // 当前对话的子代理快照（cmd.list_subagents 回执）
+  subItems: [],              // 当前对话的子代理快照（cmd.list_subagents 整表回执）
+  subCount: 0,               // 徽标数字（lite 回包只更新它）
+  subRunning: 0,             // 有几个在跑（决定轮询间隔）
+  subSig: '',                // 上次渲染用的签名（没变就不重建列表 DOM）
   subCmd: '',                // 正在等的子代理列表 cmdId
   subTimer: 0,
   fishTalkUntil: 0,
@@ -305,7 +308,15 @@ function showView(name) {
   el.logCard.hidden = !S.logOpen   // 日志栏展开/收起由用户决定，换页不重置
   el.composer.hidden = name !== 'chat'
   if (name === 'chat' && S.current) startSubPoll()
-  else { stopSubPoll(); S.subItems = []; closeSubPanel(); if (el.subFab) el.subFab.hidden = true }
+  else {
+    stopSubPoll()
+    S.subItems = []
+    S.subCount = 0
+    S.subRunning = 0
+    S.subSig = ''
+    closeSubPanel()
+    if (el.subFab) el.subFab.hidden = true
+  }
   el.backBtn.hidden = name !== 'chat'
   if (el.title) el.title.textContent = name === 'chat' ? (S.currentTitle || '对话') : '大肥鱼远控'
   if (el.renameBtn) el.renameBtn.hidden = name !== 'chat'
@@ -1024,13 +1035,31 @@ function scheduleCacheSave() {
  * 任务标题 / 运行-空闲 / 工作时长 / 闲置时长，闲置超过 2 小时给「归档」按钮
  * （归档是会话级的可恢复操作，走已有的 cmd.archive_session）。
  *
- * 数据每 5 秒拉一次（`cmd.list_subagents`），面板关着也拉——图标上的数字要一直对。
- * 进入/离开对话、重连时都会重新拉/停掉，不留下空转的计时器。
+ * 数据按**自适应间隔**拉（`cmd.list_subagents`）：
+ * - 有子代理在跑 → 3 秒（要看得出「正在干什么」，不能慢）；
+ * - 全空闲 → 30 秒；
+ * - 面板没展开 → 60 秒，而且只拉 **lite**（`{count, running}` ≈ 60 字节，
+ *   不再是整张表 ≈ 6KB——面板关着时只需要 🐝 上的那个数字）；
+ * - 切到后台 → 停（以前锁屏还在 5 秒一轮，纯烧电和流量）。
+ * 进入/离开对话、重连时都会重新起/停，不留下空转的计时器。
  */
 const SUB_IDLE_WARN_DEFAULT_MS = 2 * 60 * 60 * 1000
 /** 闲置阈值：由宿主配置（设置页「派活助手」）下发，缺省 2h。 */
 let SUB_IDLE_WARN_MS = SUB_IDLE_WARN_DEFAULT_MS
-const SUB_POLL_MS = 5_000
+/** 有活在跑：3 秒一轮（现状里最需要实时的那档）。 */
+const SUB_FAST_MS = 3_000
+/** 全都闲着：30 秒足够（子代理要么在跑，要么就一动不动）。 */
+const SUB_SLOW_MS = 30_000
+/** 面板没开：只保徽标数字，60 秒一轮 + lite 回包。 */
+const SUB_CLOSED_MS = 60_000
+
+/** 这一轮结束后该等多久：后台/没配对 → 0（停），否则按"有没有活在跑 + 面板开没开"分档。 */
+function subPollDelay() {
+  if (!S.current || !S.paired) return 0
+  if (typeof document !== 'undefined' && document.hidden) return 0
+  if ((S.subRunning || 0) > 0) return SUB_FAST_MS
+  return S.subOpen ? SUB_SLOW_MS : SUB_CLOSED_MS
+}
 
 /** 毫秒 → 「2h05m / 3m12s / 45s」，负数/缺值显示 —。 */
 function fmtSpan(ms) {
@@ -1050,21 +1079,35 @@ function requestSubagents() {
   S.subBusy = true
   const cmdId = nextCmdIdFor('subagents')
   S.subCmd = cmdId
-  sendSealed({ t: 'cmd.list_subagents', cmdId, sessionId: S.current })
+  // 面板关着 = 只要数字：lite 回包 ~60B，整表回包对 24 个子代理是 ~6KB。
+  // 老主机不认识这个字段会把它剥掉、继续回整表，下面两条分支都能吃。
+  sendSealed({ t: 'cmd.list_subagents', cmdId, sessionId: S.current, lite: !S.subOpen })
 }
 
 function stopSubPoll() {
-  if (S.subTimer) clearInterval(S.subTimer)
+  if (S.subTimer) clearTimeout(S.subTimer)
   S.subTimer = 0
   S.subBusy = false
   S.subCmd = ''
+}
+
+/** 按当前状态排下一次拉取；调用点：回执到达、面板开合、回前台、进入对话。 */
+function scheduleSubPoll() {
+  if (S.subTimer) clearTimeout(S.subTimer)
+  S.subTimer = 0
+  const ms = subPollDelay()
+  if (!ms) return
+  S.subTimer = setTimeout(() => {
+    S.subTimer = 0
+    requestSubagents()
+  }, ms)
 }
 
 function startSubPoll() {
   stopSubPoll()
   if (!S.current) return
   requestSubagents()
-  S.subTimer = setInterval(requestSubagents, SUB_POLL_MS)
+  scheduleSubPoll()
 }
 
 function closeSubPanel() {
@@ -1075,22 +1118,31 @@ function closeSubPanel() {
 function toggleSubPanel() {
   S.subOpen = !S.subOpen
   if (el.subPanel) el.subPanel.hidden = !S.subOpen
-  if (S.subOpen) requestSubagents()
+  // 开：立刻要整表（lite 那份只有数字，画不出列表）；关：要一份 lite 把徽标数字对齐。
+  requestSubagents()
+  scheduleSubPoll()
 }
 
 function renderSubPanel() {
   const fab = el.subFab
   const list = el.subList
-  const visible = !!S.current && S.subItems.length > 0 && S.view === 'chat'
+  // 徽标数字以最近一次回包为准（lite 只给数字，整表回包会把两者一起对齐）。
+  const total = typeof S.subCount === 'number' ? S.subCount : S.subItems.length
+  const visible = !!S.current && total > 0 && S.view === 'chat'
   if (fab) {
     fab.hidden = !visible
     if (el.subCount) {
       el.subCount.hidden = !visible
-      el.subCount.textContent = String(S.subItems.length)
+      el.subCount.textContent = String(total)
     }
   }
   if (!visible && S.subOpen) closeSubPanel()
-  if (!list) return
+  // 面板关着就不画列表：lite 回包里本来没有行，重画一遍只是空转。
+  if (!list || !S.subOpen) return
+  // 数据一个字没变就不重建 DOM（24 行 × 每轮的清空重画，是这个面板最实在的一笔开销）。
+  const sig = SUB_IDLE_WARN_MS + '|' + JSON.stringify(S.subItems)
+  if (sig === S.subSig) return
+  S.subSig = sig
   list.textContent = ''
   for (const [rowIndex, row] of S.subItems.entries()) {
     const box = document.createElement('div')
@@ -1163,7 +1215,9 @@ function archiveIdleSubagents() {
     sendSealed({ t: 'cmd.archive_session', cmdId: nextCmdIdFor('archive'), sessionId: id, archived: true })
   }
   if (el.subArchiveIdle) el.subArchiveIdle.textContent = '归档中…'
-  setTimeout(requestSubagents, 1500)
+  // 归档改的是清单本身：清掉渲染签名，保证回来那一次一定重画
+  S.subSig = ''
+  setTimeout(() => { S.subSig = ''; requestSubagents() }, 1500)
 }
 
 function archiveSubagent(id, btn) {
@@ -1175,6 +1229,7 @@ function archiveSubagent(id, btn) {
   setTimeout(() => {
     btn.disabled = false
     btn.textContent = '归档'
+    S.subSig = ''
     requestSubagents()
   }, 1200)
 }
@@ -1248,6 +1303,9 @@ function goBack() {
   if (el.earlierWrap) el.earlierWrap.hidden = true
   stopSubPoll()
   S.subItems = []
+  S.subCount = 0
+  S.subRunning = 0
+  S.subSig = ''
   closeSubPanel()
   if (el.subFab) el.subFab.hidden = true
   clearOpenSession()
@@ -1311,12 +1369,26 @@ function applyEvent(p) {
       if (p.ok === false) {
         log('[子代理] ' + String(p.message || '列表读取失败').slice(0, 60))
       }
-      S.subItems = Array.isArray(data.items) ? data.items : []
+      if (Array.isArray(data.items)) {
+        // 整表回包（面板开着时）：行 + 数字一起对齐
+        S.subItems = data.items
+        S.subCount = data.items.length
+        S.subRunning = data.items.filter((row) => row && row.status === 'running').length
+      } else if (typeof data.count === 'number') {
+        // lite 回包：只有数字。别动 S.subItems —— 那是上一次整表的结果，
+        // 面板一打开就会立刻再拉一次整表，中间这一小段拿旧行显示比空列表更好。
+        S.subCount = data.count
+        S.subRunning = typeof data.running === 'number' ? data.running : 0
+        S.subSig = '' // 数字变了，下一次整表回来要重画
+      }
       // 阈值由宿主配置下发（PC 设置页「派活助手」里改，手机侧跟着走）
       if (data.config && typeof data.config.idleWarnMs === 'number' && isFinite(data.config.idleWarnMs)) {
         SUB_IDLE_WARN_MS = data.config.idleWarnMs
       }
       renderSubPanel()
+      // 这一轮结束再排下一轮：间隔取决于"有没有活在跑"和"面板开没开"，
+      // 所以只能等回执到了才知道下一轮该等多久。
+      scheduleSubPoll()
       return
     }
     // 看图的回执走这里结算：它是 a 请求/回执 一对一，不能落到下面那套「按功能名分流」的分支里
@@ -2284,14 +2356,25 @@ function boot() {
   // 重新配对：点菜单项先弹确认（还要等 5 秒），确认后才断
   el.repairBtn?.addEventListener('click', () => { closeMenu(); openRepairConfirm() })
 
-  // 回到前台立刻重连，不等退避；切后台时靠前台服务+心跳尽量撑住
+  // 回到前台立刻重连，不等退避；切后台时靠前台服务+心跳尽量撑住。
+  // 子代理轮询跟着可见性走：后台停（以前锁屏还在按 5 秒一圈地拉），回前台补一次再继续。
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return
-    if (S.ws && S.ws.readyState === 1) return
-    if (loadSession()) {
-      S.reconnectTries = 0
-      stopReconnect()
-      connect()
+    if (document.hidden) {
+      stopSubPoll()
+      return
+    }
+    if (!(S.ws && S.ws.readyState === 1)) {
+      if (loadSession()) {
+        S.reconnectTries = 0
+        stopReconnect()
+        connect()
+      }
+      return
+    }
+    // 已经连着：立刻补一次（后台那段时间的账要结清），再按新状态排下一轮
+    if (S.view === 'chat' && S.current) {
+      requestSubagents()
+      scheduleSubPoll()
     }
   })
 

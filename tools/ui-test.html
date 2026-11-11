@@ -557,6 +557,10 @@
       // ---- 23. 子代理监视器：名称/简述/活动/互斥时间/命名标黄/一键归档 ----
       D.S.current = 'sub-1'
       D.S.view = 'chat'
+      // 面板开着才画列表；角标数字以最近一次回包为准（S.subCount），
+      // 这里的"回包"就是手动塞进去的 subItems。
+      D.S.subOpen = true
+      D.S.subCount = 2
       D.S.subItems = [
         {
           id: 'c1', status: 'running', name: '渲染合批', summary: '升级 VFX 批次合并并跑通验收',
@@ -582,6 +586,15 @@
       check('空闲行显示「闲置」', /空闲 · 闲置/.test(subRows[1].textContent), subRows[1].textContent)
       check('每行都有归档按钮（非运行中）', document.querySelectorAll('#subList .subActs button').length === 1)
       check('一键归档按钮显示闲置数量', document.getElementById('subArchiveIdle').hidden === false && document.getElementById('subArchiveIdle').textContent.indexOf('1') >= 0, document.getElementById('subArchiveIdle').textContent)
+      // lite 回执（面板关着时的常态）：只更新角标数字，不碰已有的行
+      D.S.subOpen = false
+      D.S.subCmd = 'lite-cmd-1'
+      D.S.subBusy = true
+      D.applyEvent({ t: 'ev.result', ok: true, cmdId: 'lite-cmd-1', data: { lite: true, count: 5, running: 1 } })
+      check('lite 回执只更新角标数字', D.S.subCount === 5 && D.S.subRunning === 1, D.S.subCount + '/' + D.S.subRunning)
+      check('lite 回执不覆盖已有的行', D.S.subItems.length === 2, String(D.S.subItems.length))
+      D.S.subOpen = true
+      D.S.subCount = 2
       // 回执分流：ev.result 带 items 且 cmdId 匹配 → 落到子代理列表
       D.S.subCmd = 'sub-cmd-1'
       D.S.subBusy = true
@@ -589,16 +602,19 @@
       check('回执落到子代理列表（带 name 字段）', D.S.subItems.length === 1 && D.S.subItems[0].name === '后来派的一个', String(D.S.subItems.length))
       check('回执把请求标志清掉', D.S.subCmd === '' && D.S.subBusy === false)
       D.S.subItems = []
+      D.S.subCount = 0
       D.renderSubPanel()
       check('没有子代理时图标藏起来', document.getElementById('subFab').hidden === true)
       check('没有闲置时一键归档按钮藏起来', document.getElementById('subArchiveIdle').hidden === true)
       D.S.subItems = [{ id: 'cx', status: 'running', name: 'x', runningMs: 1000, idleMs: 0 }]
+      D.S.subCount = 1
       D.renderSubPanel()
       D.closeSubPanel()
       check('关闭面板后隐藏', document.getElementById('subPanel').hidden === true)
       D.S.current = savedCurrent
       D.S.view = 'chat'
       D.S.subItems = []
+      D.S.subCount = 0
 
       // ---- 17. 倒计时走完才解锁，确认后才真的断开 ----
       D.el.gearBtn.click()
