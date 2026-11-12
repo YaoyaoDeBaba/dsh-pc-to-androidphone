@@ -111,7 +111,18 @@
   .qopt{display:block;width:100%;text-align:left;background:#2a2a40;color:var(--fg);margin-bottom:6px;font-weight:400;font-size:13px;padding:10px 12px}
   .qopt.on{background:#31427a}
   footer{flex:0 0 auto;display:flex;gap:8px;padding:9px 12px;border-top:1px solid var(--line);
-    background:#171724;padding-bottom:calc(9px + env(safe-area-inset-bottom))}
+    background:#171724;padding-bottom:calc(9px + env(safe-area-inset-bottom));position:relative}
+  /* ── 输入态（聚焦输入框）：输入框铺满一行并长到 2.5 倍；
+        发送/停止浮到输入框上方，不再挤在右边；失焦后原样回去。 ── */
+  #msgInput{flex:1 1 auto;min-width:0;resize:none;font:inherit;font-size:15px;line-height:1.35;
+    height:38px;padding:9px 11px;background:#0e0e18;border:1px solid #33334a;color:var(--fg);
+    border-radius:9px;transition:height .16s ease,max-height .16s ease}
+  footer #sendBtn,footer #stopBtn{transition:right .16s ease,top .16s ease}
+  /* 38 × 2.5 = 95 */
+  footer.typing{padding-top:52px}
+  footer.typing #msgInput{flex:1 1 100%;height:95px;max-height:95px}
+  footer.typing #sendBtn{position:absolute;top:10px;right:78px}
+  footer.typing #stopBtn{position:absolute;top:10px;right:12px}
   #log{max-height:24vh;overflow:auto;font-size:11px;line-height:1.45;color:#9a9ab0;margin:0;white-space:pre-wrap;word-break:break-all}
   /* 悬浮大肥鱼（占位形象）：可拖动；位置记在 localStorage；点一下冒个小气泡 */
   #fishFab{position:fixed;left:0;top:0;z-index:40;width:64px;height:64px;touch-action:none;
@@ -188,7 +199,7 @@
   </main>
 
   <footer id="composer" hidden>
-    <input id="msgInput" placeholder="说点什么…">
+    <textarea id="msgInput" rows="1" placeholder="说点什么…（回车换行 · Ctrl+回车发送）"></textarea>
     <button id="sendBtn">发</button>
     <button id="stopBtn" class="ghost" title="中断本轮">停</button>
   </footer>

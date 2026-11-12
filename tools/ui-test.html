@@ -65,7 +65,7 @@
   <div id="earlierWrap" hidden><button id="earlierBtn">加载更早</button></div>
   <div class="card" id="messages"></div>
   <footer id="composer" hidden>
-    <input id="msgInput"><button id="sendBtn">发</button><button id="stopBtn">停</button>
+    <textarea id="msgInput"></textarea><button id="sendBtn">发</button><button id="stopBtn">停</button>
   </footer>
 </div>
 
@@ -710,6 +710,25 @@
       }, 5600)
 
       function finish() {
+  // ---- 输入框：回车换行、Ctrl+回车才发送；聚焦时进入输入态 ----
+  {
+    const box = document.getElementById('msgInput')
+    const comp = document.getElementById('composer')
+    check('输入框是 textarea（回车才能换行）', box.tagName === 'TEXTAREA', box.tagName)
+    D.S.current = 'a1'
+    D.S.msgs = []
+    box.value = '第一行'
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    check('回车不发送', D.S.msgs.length === 0, 'msgs=' + D.S.msgs.length)
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+    check('Ctrl+回车才发送', D.S.msgs.length === 1, 'msgs=' + D.S.msgs.length)
+    comp.classList.remove('typing')
+    box.dispatchEvent(new Event('focus'))
+    check('聚焦进入输入态（输入框展开、按钮上浮）', comp.classList.contains('typing'))
+    box.dispatchEvent(new Event('blur'))
+    check('失焦退出输入态（按钮回原位）', !comp.classList.contains('typing'))
+  }
+
         dump()
         const fails = out.filter(r => !r.pass).length
         if (errs.length) {

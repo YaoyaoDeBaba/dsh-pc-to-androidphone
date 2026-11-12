@@ -315,6 +315,8 @@ function showView(name) {
   el.chatView.hidden = name !== 'chat'
   el.logCard.hidden = !S.logOpen   // 日志栏展开/收起由用户决定，换页不重置
   el.composer.hidden = name !== 'chat'
+  // 离开聊天页就退出输入态：否则回到列表时输入框还保持着展开的 2.5 倍高度。
+  if (name !== 'chat') setComposerTyping(false)
   el.backBtn.hidden = name !== 'chat'
   if (el.title) el.title.textContent = name === 'chat' ? (S.currentTitle || '对话') : '大肥鱼远控'
   if (el.renameBtn) el.renameBtn.hidden = name !== 'chat'
@@ -1297,6 +1299,21 @@ function goBack() {
   clearOpenSession()
   showView('list')
   renderSessions()
+}
+
+/**
+ * 输入态：输入框铺满一行并长到 2.5 倍，发送/停止浮到它上方（样式在 index.html 的
+ * `footer.typing` 里）。退出输入状态时原样回去。
+ *
+ * 只切一个 class，不动内联样式：移动端的输入法高度、安全区都是 CSS 在管，
+ * 用 JS 改 style 只会和 CSS 打架。
+ */
+function setComposerTyping(on) {
+  const box = el.composer
+  if (!box) return
+  const next = !!on
+  if (box.classList.contains('typing') === next) return
+  box.classList.toggle('typing', next)
 }
 
 function cmdSendPrompt() {
@@ -2362,7 +2379,22 @@ function boot() {
   el.sendBtn?.addEventListener('click', cmdSendPrompt)
   el.earlierBtn?.addEventListener('click', loadEarlier)
   el.stopBtn?.addEventListener('click', cmdInterrupt)
-  el.msgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cmdSendPrompt() })
+  // 回车 = 换行（textarea 的默认行为，不拦）。发送改成 Ctrl/Cmd+Enter：
+  // 长文本里回车就发出去，是手机上最容易误触的一件事。
+  el.msgInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      cmdSendPrompt()
+    }
+  })
+  // 输入态：聚焦展开、失焦收起。
+  el.msgInput?.addEventListener('focus', () => setComposerTyping(true))
+  el.msgInput?.addEventListener('blur', () => setComposerTyping(false))
+  // ⚠️ 按钮必须在 `pointerdown` 上拦默认：否则手指按下去先触发输入框 blur
+  // （输入态收起、按钮瞬间挪位），紧接着的 click 就落在空地上了。
+  for (const btn of [el.sendBtn, el.stopBtn]) {
+    btn?.addEventListener('pointerdown', (e) => { e.preventDefault() })
+  }
 
   // 改名
   el.renameBtn?.addEventListener('click', openRenameDialog)
