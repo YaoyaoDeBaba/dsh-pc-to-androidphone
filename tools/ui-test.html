@@ -55,12 +55,13 @@
 
 <div id="listView">
   <div class="card"><h2>会话 <button id="refreshBtn">刷新</button><button id="updateBtn">更新</button><button id="repairBtn">重配</button></h2>
+    <div id="listMeta"></div>
     <div id="sessions"></div>
   </div>
 </div>
 
 <div id="chatView" hidden>
-  <div id="runBanner" hidden><span class="pulse"></span><span id="runText">深度求索中…</span></div>
+  <div id="runBanner" hidden><span class="pulse"></span><span id="runText">深度求索中…</span><span id="runSub"></span></div>
   <div id="earlierWrap" hidden><button id="earlierBtn">加载更早</button></div>
   <div class="card" id="messages"></div>
   <footer id="composer" hidden>
@@ -71,9 +72,7 @@
 <div class="card" id="logCard" hidden><button id="clearLog">清空</button><pre id="log"></pre></div>
 <div id="main"></div>
 
-<!-- 悬浮大肥鱼（占位形象）的骨架 -->
-<button id="subFab" hidden>🐝<span id="subCount" hidden></span></button>
-<div id="subPanel" hidden><div class="subHead"><span>子代理监视器</span><span><button id="subArchiveIdle" hidden>一键归档</button><button id="subClose">关闭</button></span></div><div id="subList"></div></div>
+<!-- 悬浮大肥鱼的骨架（真素材走 fish/*.webp 图集；#fishImg 是更早的占位单图，恒隐藏） -->
 <div id="fishFab" hidden><div id="fishBubble" hidden></div><div id="fishBody"><div id="fishSprite" hidden></div><img id="fishImg" hidden alt=""><svg class="fishSvg" viewBox="0 0 64 64"></svg></div></div>
 
 <div id="dlgWrap" hidden>
@@ -405,9 +404,9 @@
       check('讲话窗口内切到 talk', (D.S.fishTalkUntil = Date.now() + 1500, D.fishState() === 'talk'), D.fishState())
       D.S.fishTalkUntil = 0
       check('讲话窗口过后回 idle', D.fishState() === 'idle', D.fishState())
-      check('待机池至少 2 个动作', (D.FISH_POOLS.idle || []).length >= 2, String((D.FISH_POOLS.idle || []).length))
-      check('干活池至少 2 个动作', (D.FISH_POOLS.think || []).length >= 2, String((D.FISH_POOLS.think || []).length))
-      check('交付池至少 2 个动作', (D.FISH_POOLS.talk || []).length >= 2, String((D.FISH_POOLS.talk || []).length))
+      check('待机池至少 2 个动作（Idle / Nap）', (D.FISH_POOLS.idle || []).length >= 2, String((D.FISH_POOLS.idle || []).length))
+      check('在跑只播 Think（不再混进吃饭）', (D.FISH_POOLS.think || []).length === 1 && D.FISH_POOLS.think[0].id === 'think', JSON.stringify(D.FISH_POOLS.think))
+      check('流式回复只播 Talk（不再随机跳舞/傲娇）', (D.FISH_POOLS.talk || []).length === 1 && D.FISH_POOLS.talk[0].id === 'talk', JSON.stringify(D.FISH_POOLS.talk))
       D.S.fishPokeUntil = Date.now() + 1000
       check('点按后进入 poke', D.fishState() === 'poke', D.fishState())
       D.S.fishPokeUntil = 0
@@ -421,6 +420,29 @@
       check('运行中没有回复 → think', D.fishState() === 'think', D.fishState())
       D.S.running['fish-1'] = false
       check('停下后回 idle', D.fishState() === 'idle', D.fishState())
+      // —— 状态 → 动作的对应（2026-11-12 用户要求的那几条）——
+      D.S.cards = {}
+      D.S.fishIdleSince = Date.now() - 10 * 60 * 1000
+      check('空闲等太久 → nap', D.fishState() === 'nap', D.fishState())
+      D.fishSync()
+      check('nap 态播的是 Nap 图集', /dafeiyu_Nap\.webp/.test(document.getElementById('fishSprite').style.backgroundImage || '')
+        || document.getElementById('fishSprite').hidden === true,
+        document.getElementById('fishSprite').style.backgroundImage || '(图集没在测试页)')
+      D.S.fishIdleSince = 0
+      D.S.running['fish-1'] = true
+      D.S.cards = { r1: { sessionId: 'fish-1', kind: 'perm', payload: { action: 'x' } } }
+      check('卡在等你审批 → wait', D.fishState() === 'wait', D.fishState())
+      D.fishSync()
+      check('wait 态播的是 Tsundere 图集', /dafeiyu_Tsundere\.webp/.test(document.getElementById('fishSprite').style.backgroundImage || '')
+        || document.getElementById('fishSprite').hidden === true,
+        document.getElementById('fishSprite').style.backgroundImage || '(图集没在测试页)')
+      D.S.cards = {}
+      D.S.running['fish-1'] = false
+      // 主机上**别的**会话在跑，形象也该是 Think（不是只有当前这条才算"电脑在干活"）
+      D.S.running = { other: true }
+      check('别的会话在跑 → think', D.fishState() === 'think', D.fishState())
+      D.S.running = {}
+      check('都不跑 → idle', D.fishState() === 'idle', D.fishState())
       const fishBody = document.getElementById('fishBody')
       const down = new PointerEvent('pointerdown', { bubbles: true, clientX: 12, clientY: 12, pointerId: 7 })
       const up = new PointerEvent('pointerup', { bubbles: true, clientX: 12, clientY: 12, pointerId: 7 })
@@ -537,6 +559,8 @@
       D.S.current = 'run-1'
       D.S.running = {}
       D.S.runStart = {}
+      D.S.runDone = {}
+      D.S.step = {}
       D.updateRunBanner()
       D.syncStopBtn()
       check('空闲时「停」是灰的', document.getElementById('stopBtn').disabled === true, String(document.getElementById('stopBtn').disabled))
@@ -545,8 +569,37 @@
       check('运行中出现「深度求索中…」', document.getElementById('runBanner').hidden === false && textOf('runText').indexOf('深度求索中') >= 0, textOf('runText'))
       check('运行条带计时（m:ss）', /^深度求索中… \d+:\d\d$/.test(textOf('runText')), textOf('runText'))
       check('运行中「停」亮了', document.getElementById('stopBtn').disabled === false && document.getElementById('stopBtn').classList.contains('stopOn'))
+      // 进展面：只用主机已经发出来的加密事件（待办快照 / 流式正文）
+      D.applyEvent({ t: 'ev.todo', sessionId: 'run-1', todos: [
+        { content: '读协议定义', status: 'completed' },
+        { content: '改刷新按钮', status: 'in_progress' },
+        { content: '跑自测', status: 'pending' },
+      ] })
+      const sub1 = textOf('runSub')
+      check('运行条显示「正在：…」（来自待办 in_progress）', sub1.indexOf('正在：改刷新按钮') >= 0, sub1)
+      check('运行条显示待办进度 x/y', sub1.indexOf('待办 1/3') >= 0, sub1)
+      D.applyEvent({ t: 'ev.message_delta', sessionId: 'run-1', messageId: 'rp1', role: 'assistant', delta: '一二三四五' })
+      check('运行条显示「已写 N 字」', textOf('runSub').indexOf('已写 5 字') >= 0, textOf('runSub'))
+      check('没有主机事件时不编造「第几步」', textOf('runSub').indexOf('步') < 0, textOf('runSub'))
+      D.applyEvent({ t: 'ev.retry', sessionId: 'run-1', attempt: 2, max: 5, reason: 'TIMEOUT' })
+      check('重试时运行条显示重试进度', textOf('runSub').indexOf('重试 2/5') >= 0, textOf('runSub'))
+      D.applyEvent({ t: 'ev.compaction', sessionId: 'run-1', state: 'started' })
+      check('压缩上下文时运行条也说明', textOf('runSub').indexOf('压缩上下文') >= 0, textOf('runSub'))
+      D.applyEvent({ t: 'ev.compaction', sessionId: 'run-1', state: 'ended' })
+      // 等审批：说明卡在谁手上
+      D.applyEvent({ t: 'ev.permission_request', sessionId: 'run-1', requestId: 'rp-card', action: 'write' })
+      check('等审批时运行条写「等你审批」', textOf('runSub').indexOf('等你审批') >= 0, textOf('runSub'))
+      D.applyEvent({ t: 'ev.permission_resolved', sessionId: 'run-1', requestId: 'rp-card', by: 'desktop' })
+      check('审批收掉后不再显示「等你审批」', textOf('runSub').indexOf('等你审批') < 0, textOf('runSub'))
+      // 跑完 → 不是直接消失，而是先亮 6 秒「已完成 · 用时 x」
+      D.S.runStart['run-1'] = Date.now() - 83 * 1000
       D.applyEvent({ t: 'ev.run_state', sessionId: 'run-1', state: 'idle' })
-      check('跑完运行条收起', document.getElementById('runBanner').hidden === true)
+      check('跑完先亮「已完成 · 用时 m:ss」', document.getElementById('runBanner').hidden === false && /^已完成 · 用时 1:2\d$/.test(textOf('runText')), textOf('runText'))
+      check('完成态有 done 标记（样式区分）', document.getElementById('runBanner').classList.contains('done'))
+      check('完成态用状态条同一套记录', !!D.S.runDone['run-1'], JSON.stringify(Object.keys(D.S.runDone)))
+      D.S.runDone['run-1'].until = 0
+      D.updateRunBanner()
+      check('完成窗口过后运行条收起', document.getElementById('runBanner').hidden === true)
       check('跑完「停」重新变灰', document.getElementById('stopBtn').disabled === true && !document.getElementById('stopBtn').classList.contains('stopOn'))
       // 还原给后面的用例
       D.S.msgs = savedMsgs
@@ -554,67 +607,93 @@
       D.S.historyLoaded = savedLoaded
       D.S.earlierBusy = false
 
-      // ---- 23. 子代理监视器：名称/简述/活动/互斥时间/命名标黄/一键归档 ----
-      D.S.current = 'sub-1'
-      D.S.view = 'chat'
-      // 面板开着才画列表；角标数字以最近一次回包为准（S.subCount），
-      // 这里的"回包"就是手动塞进去的 subItems。
-      D.S.subOpen = true
-      D.S.subCount = 2
-      D.S.subItems = [
-        {
-          id: 'c1', status: 'running', name: '渲染合批', summary: '升级 VFX 批次合并并跑通验收',
-          activity: '运行 Bash', runningMs: 65000, idleMs: 1000, naming: 'ok', workMs: 65000,
-        },
-        {
-          id: 'c2', status: 'idle', name: '没按格式写的名字', naming: 'fallback',
-          task: '整理文档', workMs: 3600000, idleMs: 3 * 3600 * 1000,
-        },
-      ]
-      D.renderSubPanel()
-      check('有子代理时出现 🐝 图标', document.getElementById('subFab').hidden === false)
-      check('角标显示子代理数量', document.getElementById('subCount').textContent === '2', document.getElementById('subCount').textContent)
-      const subRows = document.querySelectorAll('#subList .subRow')
-      check('列表渲染两行', subRows.length === 2)
-      check('名称来自 label（不是整段 prompt）', subRows[0].textContent.indexOf('渲染合批') >= 0)
-      check('简述显示在行里', subRows[0].textContent.indexOf('升级 VFX 批次合并并跑通验收') >= 0)
-      check('运行中显示「运行」不显示「闲置」', /运行中 · 运行 1m05s/.test(subRows[0].textContent) && subRows[0].textContent.indexOf('闲置') < 0, subRows[0].textContent)
-      check('显示「正在：运行 Bash」', subRows[0].textContent.indexOf('正在：运行 Bash') >= 0)
-      check('未按格式的行标黄', subRows[1].querySelector('.subWarn') !== null)
-      check('未命名行显示 子代理N', subRows[1].textContent.indexOf('子代理') >= 0, subRows[1].textContent)
-      check('未按要求填写占位', subRows[1].textContent.indexOf('未按要求填写') >= 0, subRows[1].textContent)
-      check('空闲行显示「闲置」', /空闲 · 闲置/.test(subRows[1].textContent), subRows[1].textContent)
-      check('每行都有归档按钮（非运行中）', document.querySelectorAll('#subList .subActs button').length === 1)
-      check('一键归档按钮显示闲置数量', document.getElementById('subArchiveIdle').hidden === false && document.getElementById('subArchiveIdle').textContent.indexOf('1') >= 0, document.getElementById('subArchiveIdle').textContent)
-      // lite 回执（面板关着时的常态）：只更新角标数字，不碰已有的行
-      D.S.subOpen = false
-      D.S.subCmd = 'lite-cmd-1'
-      D.S.subBusy = true
-      D.applyEvent({ t: 'ev.result', ok: true, cmdId: 'lite-cmd-1', data: { lite: true, count: 5, running: 1 } })
-      check('lite 回执只更新角标数字', D.S.subCount === 5 && D.S.subRunning === 1, D.S.subCount + '/' + D.S.subRunning)
-      check('lite 回执不覆盖已有的行', D.S.subItems.length === 2, String(D.S.subItems.length))
-      D.S.subOpen = true
-      D.S.subCount = 2
-      // 回执分流：ev.result 带 items 且 cmdId 匹配 → 落到子代理列表
-      D.S.subCmd = 'sub-cmd-1'
-      D.S.subBusy = true
-      D.applyEvent({ t: 'ev.result', ok: true, cmdId: 'sub-cmd-1', data: { items: [{ id: 'c9', status: 'idle', name: '后来派的一个', idleMs: 2000 }] } })
-      check('回执落到子代理列表（带 name 字段）', D.S.subItems.length === 1 && D.S.subItems[0].name === '后来派的一个', String(D.S.subItems.length))
-      check('回执把请求标志清掉', D.S.subCmd === '' && D.S.subBusy === false)
-      D.S.subItems = []
-      D.S.subCount = 0
-      D.renderSubPanel()
-      check('没有子代理时图标藏起来', document.getElementById('subFab').hidden === true)
-      check('没有闲置时一键归档按钮藏起来', document.getElementById('subArchiveIdle').hidden === true)
-      D.S.subItems = [{ id: 'cx', status: 'running', name: 'x', runningMs: 1000, idleMs: 0 }]
-      D.S.subCount = 1
-      D.renderSubPanel()
-      D.closeSubPanel()
-      check('关闭面板后隐藏', document.getElementById('subPanel').hidden === true)
+      // ---- 22b. 列表页：每条会话都要看得出「死活 + 在干嘛 + 最后一次动」 ----
+      D.S.current = null
+      D.S.running = {}
+      D.S.runDone = {}
+      D.S.lastAct = {}
+      D.S.listStamp = 0
+      D.applyEvent({ t: 'ev.session_changed', sessions: [
+        { id: 's-run', title: '在跑的', state: 'running', workspace: 'E:\\w', updatedAt: new Date().toISOString() },
+        { id: 's-perm', title: '等审批的', state: 'awaiting-permission', workspace: 'E:\\w' },
+        { id: 's-q', title: '等回答的', state: 'awaiting-answer', workspace: 'E:\\w' },
+        { id: 's-arch', title: '归档的', state: 'archived', workspace: 'E:\\w' },
+        { id: 's-idle', title: '闲着的', state: 'idle', workspace: 'E:\\w', updatedAt: new Date(Date.now() - 3 * 60 * 1000).toISOString() },
+      ] })
+      const rowText = () => [...document.querySelectorAll('#sessions button.session')].map(b => b.textContent).join(' | ')
+      check('列表状态是文字不只是颜色：运行中', rowText().indexOf('运行中') >= 0, rowText())
+      check('列表状态：待审批', rowText().indexOf('待审批') >= 0, rowText())
+      check('列表状态：待回答', rowText().indexOf('待回答') >= 0, rowText())
+      check('列表状态：已归档', rowText().indexOf('已归档') >= 0, rowText())
+      check('列表显示最后活动时间（3 分钟前）', rowText().indexOf('3 分钟前') >= 0, rowText())
+      check('列表页显示「已更新 HH:MM」', /已更新 \d\d:\d\d/.test(textOf('listMeta')), textOf('listMeta'))
+      // 刚跑完的那条会在列表里闪一下「已完成」，不会直接跳回「空闲」
+      D.S.runDone['s-idle'] = { at: Date.now(), until: Date.now() + 6000, ms: 5000, summary: '' }
+      D.renderSessions()
+      check('列表里能看到「✓ 已完成」', rowText().indexOf('已完成') >= 0, rowText())
+
+      // ---- 22c. 「刷新」按钮：有回执、有反馈、失败要说话（修「点了没反应」） ----
+      const refreshFlow = (async () => {
+        D.showView('list')
+        D.S.sessions = [{ id: 'r-old', title: '旧会话', workspace: 'E:\\w', state: 'idle' }]
+        D.S.paired = true
+        D.S.kC2H = new Uint8Array(32)
+        D.S.noncePre = new Uint8Array(16)
+        D.S.outSeq = 1
+        const sent = []
+        D.S.ws = { readyState: 1, send: (x) => { sent.push(x); window.__WS_SENT.push(x) }, close() {} }
+        const btn = document.getElementById('refreshBtn')
+        btn.click()
+        check('刷新按钮立刻进「刷新中…」', btn.textContent === '刷新中…', btn.textContent)
+        check('刷新中按钮灰掉（防连点）', btn.disabled === true, String(btn.disabled))
+        check('刷新真的把命令发出去了', sent.length === 1 && D.S.refreshBusy === true, 'frames=' + sent.length)
+        const ids = Object.keys(D.S.ackWaiters)
+        check('刷新登记了回执等待（一对一）', ids.length === 1, String(ids.length))
+        // 主机回执到达（ev.result 走 ackWaiters 结算）
+        D.applyEvent({ t: 'ev.result', ok: true, cmdId: ids[0], data: {} })
+        await new Promise((r) => setTimeout(r, 0))
+        check('回执到了按钮变「已更新」', btn.textContent === '已更新', btn.textContent)
+        check('回执到了状态栏说清结果', textOf('status').indexOf('列表已更新') >= 0, textOf('status'))
+        check('回执到了列表页写明新鲜度', /已更新 \d\d:\d\d/.test(textOf('listMeta')), textOf('listMeta'))
+        check('刷新完不再处于忙碌态', D.S.refreshBusy === false && btn.disabled === false)
+        // 失败：主机拒绝 → 必须说出来，不许静默
+        btn.click()
+        const ids2 = Object.keys(D.S.ackWaiters)
+        D.applyEvent({ t: 'ev.result', ok: false, cmdId: ids2[0], message: '主机这一代不支持' })
+        await new Promise((r) => setTimeout(r, 0))
+        check('刷新失败按钮变「再试」', btn.textContent === '再试', btn.textContent)
+        check('刷新失败状态栏写明原因', textOf('status').indexOf('刷新失败') >= 0 && textOf('status').indexOf('不支持') >= 0, textOf('status'))
+        check('刷新失败列表页也写明原因', textOf('listMeta').indexOf('刷新失败') >= 0, textOf('listMeta'))
+        // 半开连接：readyState 还是 1、其实对面早没了 → 判定链路已死并主动重连，不能干等
+        D.S.ws.readyState = 3
+        // 给一份"已保存的配对"：让内部的 connect() 走 resume 分支（不会跳回配对页，
+        // 免得打乱后面那条 5 秒确认框用例的计时器）
+        localStorage.setItem('drc.psk', btoa('\x00'.repeat(15) + '\x07'))
+        localStorage.setItem('drc.conv', 'c_test')
+        btn.click()
+        clearTimeout(D.S.reconnectTimer)
+        D.S.reconnectTimer = 0
+        localStorage.removeItem('drc.psk')
+        localStorage.removeItem('drc.conv')
+        check('链路断了：列表页写着正在重连', textOf('listMeta').indexOf('连接断了') >= 0, textOf('listMeta'))
+        check('链路断了：状态栏不沉默（重连/配对至少要有一句）', /重连|配对|连接/.test(textOf('status')), textOf('status'))
+        // 还没配对时也要有一句话，不能当作点到了
+        D.S.paired = false
+        D.S.ws = { readyState: 1, send: () => {}, close() {} }
+        btn.click()
+        check('没配对时刷新会说明', textOf('status').indexOf('还没连上电脑') >= 0, textOf('status'))
+        D.S.paired = true
+      })()
+      void refreshFlow
+      // 同步还原：上面几块把 current 挪走了，而「看图」那段用例是异步续跑的，还等着 a1
       D.S.current = savedCurrent
-      D.S.view = 'chat'
-      D.S.subItems = []
-      D.S.subCount = 0
+      D.S.msgs = savedMsgs
+      D.S.historyLoaded = savedLoaded
+
+      // ---- 23. 派活助手已从手机端整块摘掉（2026-11-12 用户裁决） ----
+      check('手机端没有子代理面板', document.getElementById('subPanel') === null && document.getElementById('subFab') === null)
+      check('派活相关入口全没了', !('subItems' in D.S) && !('subCmd' in D.S) && !('subTimer' in D.S) && D.requestSubagents === undefined)
+      check('派活渲染函数已移除', D.renderSubPanel === undefined && D.toggleSubPanel === undefined && D.closeSubPanel === undefined)
 
       // ---- 17. 倒计时走完才解锁，确认后才真的断开 ----
       D.el.gearBtn.click()

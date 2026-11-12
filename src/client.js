@@ -135,7 +135,7 @@ const S = {
   hostModel: {},       // 电脑端 ev.model 广播来的真实模型名（用来显示；没选过时当兜底）
   fresh: {},           // 刚在手机上新建、还没标题的会话（列表里别藏起来）
   cmdNames: {},        // cmdId → 'rename' | 'models' | 'set_model'（失败时给提示用）
-  imgWaiters: {},      // cmdId → 回执回调（看图的 ev.result 按 cmdId 结算）
+  ackWaiters: {},      // cmdId → 回执回调（req/ev.result 一对一：看图、刷新列表）
   imgBusy: {},         // 图片路径 → 正在取（防连点）
   imgCache: {},        // 图片路径 → { url, name, bytes }（同一路径不重复取）
   modelErr: '',        // 取模型清单失败的原因
@@ -143,22 +143,30 @@ const S = {
   newBusyTimer: null,
   cfTimer: 0,          // 重新配对确认框的倒计时
   runStart: {},              // 会话 id → 本轮开始时间（聊天页顶部的「深度求索中…」计时）
-  subItems: [],              // 当前对话的子代理快照（cmd.list_subagents 整表回执）
-  subCount: 0,               // 徽标数字（lite 回包只更新它）
-  subRunning: 0,             // 有几个在跑（决定轮询间隔）
-  subSig: '',                // 上次渲染用的签名（没变就不重建列表 DOM）
-  subCmd: '',                // 正在等的子代理列表 cmdId
-  subTimer: 0,
+  runDone: {},               // 会话 id → { at, ms }：刚跑完的那一轮（列表/聊天页短暂显示「已完成」）
+  step: {},                  // 会话 id → 本轮进展快照 { todos, total, done, doing, retry, compact, wrote }
+  lastAct: {},               // 会话 id → 最近一次有业务事件的时间（「最后活动」用）
+  liveCmd: '',               // 聊天页 5 秒一次的运行态轮询 cmdId
   fishTalkUntil: 0,
   fishPokeUntil: 0,
   fishAnswerUntil: 0,
   fishDoneUntil: 0,
-  liveCmd: '',               // 轮询计时器
-  subOpen: false,            // 监视器面板是否展开
-  subBusy: false,            // 列表请求在飞（防连点）
+  fishIdleSince: 0,          // 进入 idle 的时刻（等太久就躺下睡觉）
   nextBeforeSeq: undefined,  // 历史翻页游标（还有更早的一页时才有）
   earlierBusy: false,        // 「加载更早」正在请求（防连点）
+  refreshBusy: false,        // 「刷新」正在等回执（防连点）
+  listStamp: 0,              // 上次成功拿到会话列表的时刻
+  lastInbound: 0,            // 最近一次从中继收到任何帧（链路看门狗用）
+  deadAt: 0,                 // 上次判定「链路已死」的时刻（防重复重连）
 }
+/*
+ * 手机端**没有**「派活助手 / 子代理监视器」了（2026-11-12 用户裁决）：
+ * 手机上不需要看派活池，直接跟包工头（主会话）说话就行。原来这里有一套
+ * `cmd.list_subagents` 的自适应轮询（在跑 3s / 全闲 30s / 面板关 60s），
+ * 那是「一次都没人看的面板」换来的持续负载 —— 连同面板 DOM、徽标、
+ * 归档按钮、`S.sub*` 状态字段、`ev.result` 的子代理回执分支一并摘掉了。
+ * 别再往回加：需要看派活在电脑上看。
+ */
 
 /* 模型选择按会话记在本地：重启 App 也能显示上次选的 */
 function readModelMap() {
@@ -182,7 +190,7 @@ function initEls() {
     'modelBtn', 'renameBtn', 'dlgWrap', 'dlgTitle', 'dlgInput', 'dlgOk', 'dlgCancel',
     'gearBtn', 'menuWrap', 'menuClose', 'confirmWrap', 'cfTitle', 'cfText', 'cfOk', 'cfCancel',
     'modelWrap', 'modelList', 'modelRefresh', 'modelClose',
-    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg', 'earlierWrap', 'earlierBtn', 'runBanner', 'runText', 'subFab', 'subCount', 'subPanel', 'subList', 'subClose', 'subArchiveIdle']
+    'fishFab', 'fishBubble', 'fishBody', 'fishSprite', 'fishImg', 'earlierWrap', 'earlierBtn', 'runBanner', 'runText', 'runSub', 'listMeta']
   for (const k of ids) el[k] = $(k)
 }
 
@@ -307,16 +315,6 @@ function showView(name) {
   el.chatView.hidden = name !== 'chat'
   el.logCard.hidden = !S.logOpen   // 日志栏展开/收起由用户决定，换页不重置
   el.composer.hidden = name !== 'chat'
-  if (name === 'chat' && S.current) startSubPoll()
-  else {
-    stopSubPoll()
-    S.subItems = []
-    S.subCount = 0
-    S.subRunning = 0
-    S.subSig = ''
-    closeSubPanel()
-    if (el.subFab) el.subFab.hidden = true
-  }
   el.backBtn.hidden = name !== 'chat'
   if (el.title) el.title.textContent = name === 'chat' ? (S.currentTitle || '对话') : '大肥鱼远控'
   if (el.renameBtn) el.renameBtn.hidden = name !== 'chat'
@@ -335,17 +333,41 @@ function showView(name) {
 }
 
 /* ================= 会话列表（含状态徽标） ================= */
+/*
+ * 「这条会话是死是活、在干嘛」必须在列表上一眼看见（2026-11-12 用户：
+ * 「现在看不到会话是死是活，在干嘛，只能盲等」）。
+ * 所以每行给三样东西：**状态文字**（不是只靠颜色点）+ **最后活动时间** + 刚跑完的
+ * 「已完成」闪现。状态来源只有主机已经在发的东西：`ev.session_changed` 的
+ * `state`/`running`/`updatedAt`，以及加密的 `ev.run_state`。
+ */
+const RUN_DONE_FLASH_MS = 6000
+
 function sessionState(s) {
   const id = s.id
-  if (S.running[id]) return { cls: 'run', text: '运行中' }
+  // 刚跑完：给一次短暂的「已完成」，否则状态会从「运行中」直接跳回「空闲」，
+  // 用户分不清"跑完了"和"根本没跑"。
+  const done = S.runDone[id]
+  if (!S.running[id] && done && Date.now() < done.until) {
+    return { cls: 'ok', text: '✓ 已完成' }
+  }
+  if (S.running[id]) return { cls: 'run', text: '● 运行中' }
   switch (s.state) {
-    case 'running': return { cls: 'run', text: '运行中' }
-    case 'awaiting-permission': return { cls: 'attn', text: '待审批' }
-    case 'awaiting-answer': return { cls: 'attn', text: '待回答' }
-    case 'detached': return { cls: '', text: '已脱离' }
-    case 'archived': return { cls: '', text: '已归档' }
+    case 'running': return { cls: 'run', text: '● 运行中' }
+    case 'awaiting-permission': return { cls: 'attn', text: '🔐 待审批' }
+    case 'awaiting-answer': return { cls: 'attn', text: '❓ 待回答' }
+    case 'detached': return { cls: 'off', text: '⚠ 已脱离' }
+    case 'archived': return { cls: 'arch', text: '📦 已归档' }
     default: return { cls: '', text: '空闲' }
   }
+}
+
+/** 这一行"最后动过"是什么时候：本地看到的事件优先，其次主机给的 updatedAt。 */
+function lastActivityText(s) {
+  const id = s.id
+  const local = S.lastAct[id] || 0
+  const fromHost = s.updatedAt ? (Date.parse(s.updatedAt) || 0) : 0
+  const at = Math.max(local, fromHost)
+  return at ? fmtAgo(at) : ''
 }
 
 function workspaceLabel(ws) {
@@ -389,6 +411,7 @@ function renderSessions() {
     d.className = 'muted'
     d.textContent = '还没有会话（点刷新试试）'
     el.sessions.appendChild(d)
+    setListMeta(S.listStamp ? '已更新 ' + fmtClock(S.listStamp) + ' · 0 条会话' : '还没拉到列表（点刷新）')
     return
   }
 
@@ -422,12 +445,24 @@ function renderSessions() {
       const btn = document.createElement('button')
       btn.className = 'session' + (S.current === id ? ' active' : '')
       const t = document.createElement('span'); t.className = 't'; t.textContent = title
+      const ago = lastActivityText(s)
+      const when = document.createElement('span')
+      when.className = 'when'
+      when.textContent = ago
       const b = document.createElement('span'); b.className = 'badge ' + st.cls; b.textContent = st.text
-      btn.appendChild(t); btn.appendChild(b)
+      btn.appendChild(t)
+      if (ago) btn.appendChild(when)
+      btn.appendChild(b)
+      btn.title = [title, ago ? '最后活动 ' + ago : '', st.text].filter(Boolean).join(' · ')
       btn.onclick = () => openSession(id, title)
       el.sessions.appendChild(btn)
     }
   }
+  // 列表页的"新鲜度"：没有它，用户没法判断手上这一页是不是几小时前的
+  const stamp = S.listStamp
+    ? '已更新 ' + fmtClock(S.listStamp) + ' · ' + list.length + ' 条会话'
+    : '还没拉到列表（点刷新）'
+  setListMeta(stamp)
 }
 
 /* ================= 消息渲染 ================= */
@@ -638,26 +673,29 @@ function sendSealed(payload) {
   sendRaw({ t: 'enc', sessionId: S.convId, seq, ciphertext: rec.ciphertext })
 }
 
-/* ================= 看图：向主机要图片 ================= */
+/* ================= 请求/回执（req → ev.result 一对一） ================= */
 /*
- * 一条命令只回一块（中继单帧硬上限 1MB，整张图会被掐断连接、App 直接掉线），
- * 所以这里是「要一块 → 再要下一块」的循环，本地拼成 Blob 再显示。
+ * 手机发的命令全是「发出去就完事」的（fire-and-forget），唯一的回执面是主机回的
+ * `ev.result`。这个函数把「发 → 等回执 → 超时判失败」收成一颗 Promise：
+ * 看图分块用它，会话列表刷新也用它（2026-11-12：刷新按钮原来没有回执也没有超时，
+ * 链路半死时点了永远没反应 —— 见 refreshSessions 里的根因注释）。
  * 时序：sendSealed 发出去，回执在 applyEvent 的 ev.result 里按 cmdId 结算。
  */
 const IMG_CMD_TIMEOUT_MS = 20000
 // 240 × 256KB ≈ 60MB，主机侧上限 20MB，留足余量（主要防主机回next 写错时死循环）
 const IMG_MAX_CHUNKS = 240
 
-function requestCmd(payload, timeoutMs) {
+function requestAck(payload, timeoutMs) {
   return new Promise((resolve) => {
     const id = payload.cmdId
     const timer = setTimeout(() => {
-      delete S.imgWaiters[id]
+      delete S.ackWaiters[id]
+      delete S.cmdNames[id]   // 超时了就把标记一起清掉：迟到的那条回执不该再按"功能名"给提示
       resolve({ ok: false, message: '主机没回应（超时）' })
     }, timeoutMs || IMG_CMD_TIMEOUT_MS)
-    S.imgWaiters[id] = (res) => {
+    S.ackWaiters[id] = (res) => {
       clearTimeout(timer)
-      delete S.imgWaiters[id]
+      delete S.ackWaiters[id]
       resolve(res)
     }
     sendSealed(payload)
@@ -669,7 +707,7 @@ function baseNameOf(p) {
   return parts[parts.length - 1] || '图片'
 }
 
-// requester 是注入点（自测用）：不传就走真的 requestCmd
+// requester 是注入点（自测用）：不传就走真的 requestAck
 async function loadImage(path, btn, requester) {
   if (S.imgBusy[path]) return
   if (S.imgCache[path]) return   // 已经取过（renderMessages 会直接贴出来）
@@ -683,7 +721,7 @@ async function loadImage(path, btn, requester) {
   try {
     for (let i = 0; i < IMG_MAX_CHUNKS; i++) {
       if (btn) btn.textContent = '取图中… ' + (total ? Math.min(99, Math.round((offset / total) * 100)) + '%' : '')
-      const ask = requester || requestCmd
+      const ask = requester || requestAck
       const res = await ask({
         t: 'cmd.file_image',
         cmdId: nextCmdId(),
@@ -723,6 +761,127 @@ async function loadImage(path, btn, requester) {
 
 function cmdListSessions() {
   sendSealed({ t: 'cmd.list_sessions', cmdId: nextCmdId() })
+}
+
+/* ================= 「刷新」按钮：发出去要有回音 ================= */
+/*
+ * 2026-11-12 的根因（真机取证，见报告）：**不是**按钮被挡住，也不是点击区域太小 ——
+ * headless 里 `elementFromPoint` 打中的就是 refreshBtn 本身，46×40 css px 完全可点。
+ * 是这条链路三处都「不吭声」：
+ *   1. 原来一句 `if (S.paired) cmdListSessions()`：fire-and-forget —— `nextCmdId()`
+ *      不登记回执、没有超时、也不看 p.ok，主机不回就永远没下文；
+ *   2. 成功时屏幕上**没有任何变化**（列表本来就长那样），"刷新成功"和"按钮是死的"
+ *      在视觉上完全一样 —— 用户当然判定它没反应；
+ *   3. 失败路径全静默：`!S.paired` 直接 return；socket 不是 open 时 `sendRaw`
+ *      只往默认收起的日志栏写一行；而 Android WebView 退到后台后最常见的形态是
+ *      **半开 socket**（TCP 没关、readyState 还是 1，发出去石沉大海），
+ *      这种状态下所有命令都发得出去、一个回执都回不来，且永远不会触发 onclose。
+ *   唯一的"恢复"方式于是变成退出 App 重进 —— 那会重建 socket、重新拉列表。
+ * 所以这里补三件事：可等待的回执（requestAck）+ 按钮/状态栏可见反馈 + 链路活性判断。
+ */
+const LIST_ACK_TIMEOUT_MS = 10000
+/** 25 秒一次心跳，连丢三拍还没有任何入帧就判链路已死（半开连接只有主动掐才能恢复）。 */
+const LINK_SILENT_MS = 75000
+
+function fmtClock(ts) {
+  const d = new Date(ts || Date.now())
+  const p = (n) => String(n).padStart(2, '0')
+  return p(d.getHours()) + ':' + p(d.getMinutes())
+}
+
+/** 时间 → 「刚刚 / 3 分钟前 / 2 小时前 / 11-09」；空值给空串。 */
+function fmtAgo(t) {
+  if (!t) return ''
+  const ms = typeof t === 'number' ? t : Date.parse(t)
+  if (!isFinite(ms)) return ''
+  const d = Date.now() - ms
+  if (d < 60e3) return '刚刚'
+  if (d < 3600e3) return Math.floor(d / 60e3) + ' 分钟前'
+  if (d < 86400e3) return Math.floor(d / 3600e3) + ' 小时前'
+  if (d < 7 * 86400e3) return Math.floor(d / 86400e3) + ' 天前'
+  const dt = new Date(ms)
+  return (dt.getMonth() + 1) + '-' + String(dt.getDate()).padStart(2, '0')
+}
+
+function setRefreshBtn(text) {
+  const btn = el.refreshBtn
+  if (!btn) return
+  btn.disabled = S.refreshBusy
+  btn.textContent = text || '刷新'
+}
+
+function setListMeta(text) {
+  if (el.listMeta) el.listMeta.textContent = text || ''
+}
+
+/** 半开连接/发送失败：别装作没发生——立刻告诉用户，并主动重建连接。 */
+function noteLinkDead(why) {
+  const now = Date.now()
+  if (now < (S.deadAt || 0)) return false
+  S.deadAt = now + 15000      // 15 秒内不重复触发（几个命令同时失败时只重连一次）
+  log('[链路] ' + why + '：判定连接已死，主动重连')
+  S.reconnectTries = 0
+  stopReconnect()
+  const old = S.ws
+  S.ws = null                 // 让 sendRaw 立刻知道发不出去
+  try { if (old) old.close() } catch (_) {}
+  connect()
+  return false
+}
+
+/**
+ * 链路活性：`readyState === 1` 不代表对面还活着（半开连接）。
+ * 判据只用"多久没收到任何帧"，因为心跳 25 秒一次、pong 也走同一根线。
+ */
+function checkLinkAlive() {
+  if (!S.paired) return true
+  const ws = S.ws
+  if (!ws || ws.readyState !== 1) return true   // 真断了由 onclose 那条路负责
+  const since = Date.now() - (S.lastInbound || Date.now())
+  if (since < LINK_SILENT_MS) return true
+  setStatus('连接像是断了，正在重连…', '#e0a83a')
+  setListMeta('连接像是断了，正在重连…')
+  noteLinkDead(Math.round(since / 1000) + ' 秒没收到任何帧')
+  return false
+}
+
+/**
+ * 刷新会话列表：按钮必须给出可见反馈，失败要说出来，成功也要有"刚更新"的痕迹。
+ * @param {{silent?: boolean}} opts silent = 回前台自动刷（不改按钮文案，但仍会报错）
+ */
+async function refreshSessions(opts) {
+  const silent = !!(opts && opts.silent)
+  if (S.refreshBusy) return false
+  if (!S.ws || S.ws.readyState !== 1) {
+    setStatus('连接断了，正在重连…', '#ff5c7a')
+    setListMeta('连接断了，正在重连…')
+    noteLinkDead('发送前发现连接不在')   // 它内部会 connect()；万一又失败，由 onclose 那条退避接管
+    return false
+  }
+  if (!S.paired || !S.kC2H) {
+    setStatus('还没连上电脑，先配对', '#e0a83a')
+    setListMeta('还没连上电脑')
+    return false
+  }
+  S.refreshBusy = true
+  if (!silent) setRefreshBtn('刷新中…')
+  const res = await requestAck({ t: 'cmd.list_sessions', cmdId: nextCmdIdFor('list') }, LIST_ACK_TIMEOUT_MS)
+  S.refreshBusy = false
+  if (res.ok) {
+    const n = S.sessions.length
+    setRefreshBtn('已更新')
+    setListMeta('已更新 ' + fmtClock(S.listStamp || Date.now()) + ' · ' + n + ' 条会话')
+    setStatus('列表已更新（' + n + ' 条）', '#3ecf8e')
+    setTimeout(() => { if (!S.refreshBusy) setRefreshBtn('刷新') }, 1500)
+    return true
+  }
+  const msg = String(res.message || '刷新失败').slice(0, 40)
+  setRefreshBtn('再试')
+  setListMeta('刷新失败：' + msg)
+  setStatus('刷新失败：' + msg, '#ff5c7a')
+  log('[刷新] ' + msg)
+  setTimeout(() => { if (!S.refreshBusy) setRefreshBtn('刷新') }, 2000)
+  return false
 }
 
 /**
@@ -1029,231 +1188,66 @@ function scheduleCacheSave() {
   cacheTimer = setTimeout(() => { if (S.current === id) saveCache(id, S.msgs) }, 500)
 }
 
-/* ================= 子代理监视器（手机端） ================= */
-/*
- * 当前对话有子代理时，输入框上方出现一颗 🐝 小图标；点开是一个只读面板：
- * 任务标题 / 运行-空闲 / 工作时长 / 闲置时长，闲置超过 2 小时给「归档」按钮
- * （归档是会话级的可恢复操作，走已有的 cmd.archive_session）。
- *
- * 数据按**自适应间隔**拉（`cmd.list_subagents`）：
- * - 有子代理在跑 → 3 秒（要看得出「正在干什么」，不能慢）；
- * - 全空闲 → 30 秒；
- * - 面板没展开 → 60 秒，而且只拉 **lite**（`{count, running}` ≈ 60 字节，
- *   不再是整张表 ≈ 6KB——面板关着时只需要 🐝 上的那个数字）；
- * - 切到后台 → 停（以前锁屏还在 5 秒一轮，纯烧电和流量）。
- * 进入/离开对话、重连时都会重新起/停，不留下空转的计时器。
- */
-const SUB_IDLE_WARN_DEFAULT_MS = 2 * 60 * 60 * 1000
-/** 闲置阈值：由宿主配置（设置页「派活助手」）下发，缺省 2h。 */
-let SUB_IDLE_WARN_MS = SUB_IDLE_WARN_DEFAULT_MS
-/** 有活在跑：3 秒一轮（现状里最需要实时的那档）。 */
-const SUB_FAST_MS = 3_000
-/** 全都闲着：30 秒足够（子代理要么在跑，要么就一动不动）。 */
-const SUB_SLOW_MS = 30_000
-/** 面板没开：只保徽标数字，60 秒一轮 + lite 回包。 */
-const SUB_CLOSED_MS = 60_000
-
-/** 这一轮结束后该等多久：后台/没配对 → 0（停），否则按"有没有活在跑 + 面板开没开"分档。 */
-function subPollDelay() {
-  if (!S.current || !S.paired) return 0
-  if (typeof document !== 'undefined' && document.hidden) return 0
-  if ((S.subRunning || 0) > 0) return SUB_FAST_MS
-  return S.subOpen ? SUB_SLOW_MS : SUB_CLOSED_MS
-}
-
-/** 毫秒 → 「2h05m / 3m12s / 45s」，负数/缺值显示 —。 */
-function fmtSpan(ms) {
-  if (typeof ms !== 'number' || !isFinite(ms) || ms <= 0) return '—'
-  const total = Math.floor(ms / 1000)
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const sec = total % 60
-  if (h > 0) return h + 'h' + String(m).padStart(2, '0') + 'm'
-  if (m > 0) return m + 'm' + String(sec).padStart(2, '0') + 's'
-  return sec + 's'
-}
-
-function requestSubagents() {
-  if (!S.current || !S.paired || !S.ws || S.ws.readyState !== 1) return
-  if (S.subBusy) return
-  S.subBusy = true
-  const cmdId = nextCmdIdFor('subagents')
-  S.subCmd = cmdId
-  // 面板关着 = 只要数字：lite 回包 ~60B，整表回包对 24 个子代理是 ~6KB。
-  // 老主机不认识这个字段会把它剥掉、继续回整表，下面两条分支都能吃。
-  sendSealed({ t: 'cmd.list_subagents', cmdId, sessionId: S.current, lite: !S.subOpen })
-}
-
-function stopSubPoll() {
-  if (S.subTimer) clearTimeout(S.subTimer)
-  S.subTimer = 0
-  S.subBusy = false
-  S.subCmd = ''
-}
-
-/** 按当前状态排下一次拉取；调用点：回执到达、面板开合、回前台、进入对话。 */
-function scheduleSubPoll() {
-  if (S.subTimer) clearTimeout(S.subTimer)
-  S.subTimer = 0
-  const ms = subPollDelay()
-  if (!ms) return
-  S.subTimer = setTimeout(() => {
-    S.subTimer = 0
-    requestSubagents()
-  }, ms)
-}
-
-function startSubPoll() {
-  stopSubPoll()
-  if (!S.current) return
-  requestSubagents()
-  scheduleSubPoll()
-}
-
-function closeSubPanel() {
-  S.subOpen = false
-  if (el.subPanel) el.subPanel.hidden = true
-}
-
-function toggleSubPanel() {
-  S.subOpen = !S.subOpen
-  if (el.subPanel) el.subPanel.hidden = !S.subOpen
-  // 开：立刻要整表（lite 那份只有数字，画不出列表）；关：要一份 lite 把徽标数字对齐。
-  requestSubagents()
-  scheduleSubPoll()
-}
-
-function renderSubPanel() {
-  const fab = el.subFab
-  const list = el.subList
-  // 徽标数字以最近一次回包为准（lite 只给数字，整表回包会把两者一起对齐）。
-  const total = typeof S.subCount === 'number' ? S.subCount : S.subItems.length
-  const visible = !!S.current && total > 0 && S.view === 'chat'
-  if (fab) {
-    fab.hidden = !visible
-    if (el.subCount) {
-      el.subCount.hidden = !visible
-      el.subCount.textContent = String(total)
-    }
-  }
-  if (!visible && S.subOpen) closeSubPanel()
-  // 面板关着就不画列表：lite 回包里本来没有行，重画一遍只是空转。
-  if (!list || !S.subOpen) return
-  // 数据一个字没变就不重建 DOM（24 行 × 每轮的清空重画，是这个面板最实在的一笔开销）。
-  const sig = SUB_IDLE_WARN_MS + '|' + JSON.stringify(S.subItems)
-  if (sig === S.subSig) return
-  S.subSig = sig
-  list.textContent = ''
-  for (const [rowIndex, row] of S.subItems.entries()) {
-    const box = document.createElement('div')
-    box.className = 'subRow'
-    const top = document.createElement('div')
-    top.className = 'subTop'
-    const dot = document.createElement('span')
-    dot.className = 'subDot' + (row.status === 'running' ? ' run' : '')
-    const name = document.createElement('span')
-    name.className = 'subName'
-    // 名称优先级：官方 label 的「名称」→ 标题 → 任务首行 → id
-    name.textContent = (row.naming === 'ok' && row.name) ? row.name : ('子代理' + (rowIndex + 1))
-    top.appendChild(dot)
-    top.appendChild(name)
-    if (row.naming === 'fallback') {
-      const warn = document.createElement('span')
-      warn.className = 'subWarn'
-      warn.textContent = '⚠ 命名不合规'
-      warn.title = '派活时 description 应按「名称｜一句话简述」填写'
-      top.appendChild(warn)
-    }
-    box.appendChild(top)
-    const stale = row.status === 'idle' && (row.idleMs || 0) >= SUB_IDLE_WARN_MS
-    const meta = document.createElement('div')
-    meta.className = 'subMeta' + (stale ? ' stale' : '')
-    // 运行 / 闲置互斥：跑着只看运行时长，停了只看闲置时长
-    const time = row.status === 'running'
-      ? '运行 ' + fmtSpan(row.runningMs != null ? row.runningMs : row.workMs)
-      : '闲置 ' + fmtSpan(row.idleMs)
-    meta.textContent = (row.status === 'running' ? '运行中' : '空闲') + ' · ' + time + (stale ? ' · 建议归档' : '')
-    box.appendChild(meta)
-    const summary = row.summary || '未按要求填写'
-    if (summary) {
-      const text = document.createElement('div')
-      text.className = 'subTask'
-      text.textContent = summary
-      box.appendChild(text)
-    }
-    if (row.status === 'running' && row.activity) {
-      const act = document.createElement('div')
-      act.className = 'subAct'
-      act.textContent = '正在：' + row.activity
-      box.appendChild(act)
-    }
-    if (row.status !== 'running') {
-      const acts = document.createElement('div')
-      acts.className = 'subActs'
-      const btn = document.createElement('button')
-      btn.textContent = '归档'
-      btn.addEventListener('click', () => archiveSubagent(row.id, btn))
-      acts.appendChild(btn)
-      box.appendChild(acts)
-    }
-    list.appendChild(box)
-  }
-  if (el.subArchiveIdle) {
-    const idleCount = S.subItems.filter((row) => row.status !== 'running' && (row.idleMs || 0) >= SUB_IDLE_WARN_MS).length
-    el.subArchiveIdle.hidden = idleCount === 0
-    el.subArchiveIdle.textContent = '一键归档 (' + idleCount + ')'
-  }
-}
-
-/** 批量归档：把所有闲置 ≥2h 的子代理逐条发 archive 命令。 */
-function archiveIdleSubagents() {
-  const ids = S.subItems
-    .filter((row) => row.status !== 'running' && (row.idleMs || 0) >= SUB_IDLE_WARN_MS)
-    .map((row) => row.id)
-  if (!ids.length) return
-  for (const id of ids) {
-    sendSealed({ t: 'cmd.archive_session', cmdId: nextCmdIdFor('archive'), sessionId: id, archived: true })
-  }
-  if (el.subArchiveIdle) el.subArchiveIdle.textContent = '归档中…'
-  // 归档改的是清单本身：清掉渲染签名，保证回来那一次一定重画
-  S.subSig = ''
-  setTimeout(() => { S.subSig = ''; requestSubagents() }, 1500)
-}
-
-function archiveSubagent(id, btn) {
-  if (!id) return
-  btn.disabled = true
-  btn.textContent = '归档中…'
-  sendSealed({ t: 'cmd.archive_session', cmdId: nextCmdIdFor('archive'), sessionId: id, archived: true })
-  // 归档回执没有专属 kind：给足一拍后刷新一次列表（失败也会自然回到旧状态）
-  setTimeout(() => {
-    btn.disabled = false
-    btn.textContent = '归档'
-    S.subSig = ''
-    requestSubagents()
-  }, 1200)
-}
-
 /* ================= 运行状态条 + 停止键（灰/亮） ================= */
+/*
+ * 一条横幅要回答三个问题（2026-11-12 用户：「看不到在干嘛，只能盲等」）：
+ *   1. 跑了多久 —— 本地计时（`S.runStart`，第一帧 running 起算）；
+ *   2. 跑到哪了 —— 只能用**主机已经发出的加密业务事件**：
+ *      `ev.todo`（待办全量快照：完成 x/y、正在做哪条）、`ev.message_delta`
+ *      （这一轮已写多少字）、`ev.retry` / `ev.compaction`（重试、压缩上下文）、
+ *      `ev.permission_request` / `ev.question_request`（卡在等你）。
+ *      **工具步数拿不到**：主机自 2026-10-30 起刻意不把工具细节发到手机
+ *      （`kernel-events.ts` 的 `case 'tool'` 只 `noteStep()`），逐步计数只进
+ *      `statusDigest`（明文摘要，手机侧拿不到实时值）。所以这里不编造一个"第 N 步"。
+ *   3. 停下来了要看得见 —— 从 running → idle 不直接消失，先亮 6 秒「已完成 · 用时 x」。
+ */
 function fmtElapsed(ms) {
   const total = Math.max(0, Math.floor(ms / 1000))
   return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0')
 }
 
-/** 当前会话在跑就显示「深度求索中… m:ss」并每秒刷新；不跑就藏起来。 */
+/** 本轮进展的一句话摘要：只用真实事件，"正在：…"来自待办里 in_progress 那条。 */
+function runProgressText(id) {
+  const st = S.step[id] || {}
+  const now = Date.now()
+  const bits = []
+  if (st.gate) bits.push(st.gate)
+  if (st.compact) bits.push('压缩上下文')
+  if (st.retry && now - (st.retryAt || 0) < 20000) bits.push('重试 ' + st.retry)
+  if (st.doing) bits.push('正在：' + st.doing)
+  if (st.total) bits.push('待办 ' + (st.done || 0) + '/' + st.total)
+  if (st.wrote) bits.push('已写 ' + st.wrote + ' 字')
+  return bits.join(' · ')
+}
+
+/** 当前会话在跑就显示「深度求索中… m:ss · 进展」并每秒刷新；刚跑完先亮一会儿「已完成」。 */
 function updateRunBanner() {
   const box = el.runBanner
   const txt = el.runText
   if (!box || !txt) return
-  const running = !!(S.current && S.running[S.current])
+  const id = S.current
+  const running = !!(id && S.running[id])
+  const done = id ? S.runDone[id] : null
+  if (!running && done && Date.now() < done.until) {
+    box.hidden = false
+    box.classList.add('done')
+    txt.textContent = '已完成 · 用时 ' + fmtElapsed(done.ms)
+    if (el.runSub) el.runSub.textContent = done.summary || ''
+    if (!runTicker) runTicker = setInterval(updateRunBanner, 1000)
+    return
+  }
   if (!running) {
     box.hidden = true
+    box.classList.remove('done')
+    if (el.runSub) el.runSub.textContent = ''
     if (runTicker) { clearInterval(runTicker); runTicker = 0 }
     return
   }
-  const started = S.runStart[S.current] || Date.now()
+  const started = S.runStart[id] || Date.now()
   box.hidden = false
+  box.classList.remove('done')
   txt.textContent = '深度求索中… ' + fmtElapsed(Date.now() - started)
+  if (el.runSub) el.runSub.textContent = runProgressText(id)
   if (!runTicker) runTicker = setInterval(updateRunBanner, 1000)
 }
 
@@ -1289,7 +1283,6 @@ function openSession(id, title) {
   saveOpenSession(id, title || '')
   sendSealed(historyCmd(id))
   sendSealed({ t: 'cmd.get_pending', cmdId: nextCmdId(), sessionId: id })
-  startSubPoll()
 }
 
 function goBack() {
@@ -1301,13 +1294,6 @@ function goBack() {
   S.nextBeforeSeq = undefined
   S.earlierBusy = false
   if (el.earlierWrap) el.earlierWrap.hidden = true
-  stopSubPoll()
-  S.subItems = []
-  S.subCount = 0
-  S.subRunning = 0
-  S.subSig = ''
-  closeSubPanel()
-  if (el.subFab) el.subFab.hidden = true
   clearOpenSession()
   showView('list')
   renderSessions()
@@ -1337,6 +1323,8 @@ function applyEvent(p) {
   // —— 全局事件（按契约 F11 不带 sessionId） ——
   if (t === 'ev.session_changed') {
     S.sessions = Array.isArray(p.sessions) ? p.sessions : []
+    // 主机主动推的列表就是"新鲜的一份"：记下时间，列表页据此显示"已更新 HH:MM"
+    S.listStamp = Date.now()
     renderSessions()
     return
   }
@@ -1346,7 +1334,7 @@ function applyEvent(p) {
     return
   }
   if (t === 'ev.result') {
-    // 子代理列表的回执：一对一，先在这里结算，别落到下面的功能分流里
+    // 聊天页 5 秒一次的运行态轮询回执：一对一，先在这里结算，别落到下面的功能分流里
     if (S.liveCmd && p.cmdId === S.liveCmd) {
       S.liveCmd = ''
       delete S.cmdNames[p.cmdId]
@@ -1362,39 +1350,11 @@ function applyEvent(p) {
       }
       return
     }
-    if (S.subCmd && p.cmdId === S.subCmd) {
-      S.subCmd = ''
-      S.subBusy = false
-      const data = p.data && typeof p.data === 'object' ? p.data : {}
-      if (p.ok === false) {
-        log('[子代理] ' + String(p.message || '列表读取失败').slice(0, 60))
-      }
-      if (Array.isArray(data.items)) {
-        // 整表回包（面板开着时）：行 + 数字一起对齐
-        S.subItems = data.items
-        S.subCount = data.items.length
-        S.subRunning = data.items.filter((row) => row && row.status === 'running').length
-      } else if (typeof data.count === 'number') {
-        // lite 回包：只有数字。别动 S.subItems —— 那是上一次整表的结果，
-        // 面板一打开就会立刻再拉一次整表，中间这一小段拿旧行显示比空列表更好。
-        S.subCount = data.count
-        S.subRunning = typeof data.running === 'number' ? data.running : 0
-        S.subSig = '' // 数字变了，下一次整表回来要重画
-      }
-      // 阈值由宿主配置下发（PC 设置页「派活助手」里改，手机侧跟着走）
-      if (data.config && typeof data.config.idleWarnMs === 'number' && isFinite(data.config.idleWarnMs)) {
-        SUB_IDLE_WARN_MS = data.config.idleWarnMs
-      }
-      renderSubPanel()
-      // 这一轮结束再排下一轮：间隔取决于"有没有活在跑"和"面板开没开"，
-      // 所以只能等回执到了才知道下一轮该等多久。
-      scheduleSubPoll()
-      return
-    }
-    // 看图的回执走这里结算：它是 a 请求/回执 一对一，不能落到下面那套「按功能名分流」的分支里
-    const imgWaiter = S.imgWaiters[p.cmdId]
-    if (imgWaiter) {
-      imgWaiter({ ok: p.ok === true, message: p.message, data: p.data })
+    // 一对一请求的回执（看图 / 刷新列表）：按 cmdId 结算，别落到下面那套「按功能名分流」的分支里
+    const waiter = S.ackWaiters[p.cmdId]
+    if (waiter) {
+      delete S.cmdNames[p.cmdId]   // 回执到了就把「这条是干嘛的」标记删掉，别让它无限涨
+      waiter({ ok: p.ok === true, message: p.message, data: p.data })
       return
     }
     const d = p.data && typeof p.data === 'object' ? p.data : null
@@ -1468,18 +1428,38 @@ function applyEvent(p) {
     if (sid) {
       const runningNow = p.state === 'running'
       // 第一次看到 running 才记开始时间：反复的 running 帧不能把计时器重置
-      if (runningNow && !S.running[sid]) S.runStart[sid] = Date.now()
+      if (runningNow && !S.running[sid]) {
+        S.runStart[sid] = Date.now()
+        S.step[sid] = {}          // 新一轮：上一轮的待办/字数不许串进来
+      }
+      const startedAt = S.runStart[sid]   // 收尾前先取走：下面会把它删掉
       if (!runningNow) delete S.runStart[sid]
       const wasRunning = !!S.running[sid]
       S.running[sid] = runningNow
+      S.lastAct[sid] = Date.now()
       if (!wasRunning && runningNow) {
         // 新一轮开始：清掉上一轮的“回答中/完成”窗口，否则会串状态
         S.fishAnswerUntil = 0
         S.fishDoneUntil = 0
+        delete S.runDone[sid]
       }
       if (wasRunning && !runningNow) {
+        // 跑完了：留一条 6 秒的「已完成 · 用时 x」——状态从「运行中」直接跳回
+        // 「空闲」时用户分不清"跑完"和"没跑过"，这条过渡就是给眼睛的交代。
+        const spent = Date.now() - (startedAt || Date.now())
+        const summary = runProgressText(sid) || (p.detail === 'agent-error' ? '出错了' : '')
+        S.runDone[sid] = { at: Date.now(), until: Date.now() + RUN_DONE_FLASH_MS, ms: spent, summary }
+        S.step[sid] = {}
         S.fishDoneUntil = Date.now() + 2500
         if (S.current === sid) S.fishAnswerUntil = 0
+        setTimeout(() => {
+          const rec = S.runDone[sid]
+          if (rec && Date.now() >= rec.until) {
+            delete S.runDone[sid]
+            renderSessions()
+            updateRunBanner()
+          }
+        }, RUN_DONE_FLASH_MS + 120)
       }
       fishSync()
       renderSessions()
@@ -1556,11 +1536,20 @@ function applyEvent(p) {
       if (p.done) m.done = true
       S.fishTalkUntil = Date.now() + 2500
       S.fishAnswerUntil = Date.now() + 3000
+      S.lastAct[sid || S.current] = Date.now()
+      // "跑到哪了"的一面镜子：这一轮正文已经写出来多少字（流式增长 = 活着）
+      if (deltaText && m.role !== 'user') {
+        const st = S.step[sid || S.current] || (S.step[sid || S.current] = {})
+        st.wrote = m.text.length
+      }
       fishSync()
+      updateRunBanner()
       scheduleRender()
       break
     }
     case 'ev.tool_event': {
+      // 主机从 2026-10-30 起不再往手机发工具细节（见 kernel-events.ts 的 case 'tool'），
+      // 这段只在老主机上才会走到：仍然渲染，但别指望它来数步数。
       const cid = p.callId || ('t_' + Date.now())
       let m = S.msgs.find(x => x.id === cid && x.kind === 'tool')
       if (!m) { m = { id: cid, kind: 'tool', text: '' }; S.msgs.push(m) }
@@ -1574,14 +1563,20 @@ function applyEvent(p) {
     case 'ev.permission_request': {
       if (!p.requestId) break
       S.cards[p.requestId] = { sessionId: sid || S.current, kind: 'perm', payload: p }
+      const st = S.step[sid || S.current] || (S.step[sid || S.current] = {})
+      st.gate = '等你审批'
       renderMessages()
+      updateRunBanner()
       log('收到审批请求：' + (p.action || ''))
       break
     }
     case 'ev.question_request': {
       if (!p.requestId) break
       S.cards[p.requestId] = { sessionId: sid || S.current, kind: 'q', payload: p }
+      const st = S.step[sid || S.current] || (S.step[sid || S.current] = {})
+      st.gate = '等你回答'
       renderMessages()
+      updateRunBanner()
       log('收到提问')
       break
     }
@@ -1590,7 +1585,10 @@ function applyEvent(p) {
       if (p.requestId && S.cards[p.requestId]) {
         delete S.cards[p.requestId]
         delete S.qSel[p.requestId]
+        const st = S.step[sid || S.current]
+        if (st) st.gate = ''
         renderMessages()
+        updateRunBanner()
       }
       break
     }
@@ -1629,15 +1627,34 @@ function applyEvent(p) {
       break
     }
     case 'ev.todo': {
-      // 待办暂不单独渲染，避免和消息抢版面
+      // 待办不往消息流里塞（会和正文抢版面），但它是「这一轮在干什么」的**唯一**
+      // 结构化线索：完成 x/y + 正在做哪条 → 运行横幅的第二行。
+      const todos = Array.isArray(p.todos) ? p.todos : []
+      const st = S.step[sid || S.current] || (S.step[sid || S.current] = {})
+      st.total = todos.length
+      st.done = todos.filter((x) => x && x.status === 'completed').length
+      const doing = todos.find((x) => x && x.status === 'in_progress') ||
+        todos.find((x) => x && x.status === 'pending')
+      st.doing = doing && doing.content ? String(doing.content).slice(0, 24) : ''
+      S.lastAct[sid || S.current] = Date.now()
+      updateRunBanner()
       break
     }
-    case 'ev.retry':
+    case 'ev.retry': {
+      const st = S.step[sid || S.current] || (S.step[sid || S.current] = {})
+      st.retry = p.attempt + '/' + p.max
+      st.retryAt = Date.now()
+      updateRunBanner()
       log('[重试] ' + p.attempt + '/' + p.max + (p.reason ? ' ' + p.reason : ''))
       break
-    case 'ev.compaction':
-      if (S.current === sid || !sid) setStatus('压缩上下文 ' + p.state, '#e0a83a')
+    }
+    case 'ev.compaction': {
+      const st = S.step[sid || S.current] || (S.step[sid || S.current] = {})
+      st.compact = p.state === 'started'
+      updateRunBanner()
+      if (S.current === sid || !sid) setStatus('压缩上下文 ' + p.state, p.state === 'failed' ? '#ff5c7a' : '#e0a83a')
       break
+    }
     default:
       log('[ev]', t, JSON.stringify(p).slice(0, 200))
   }
@@ -1712,6 +1729,8 @@ function connect(forcePair) {
 
 function handleFrame(f) {
   const t = f.t
+  // 链路活性：任何入帧（含 pong / ping / enc）都算"对面还活着"
+  S.lastInbound = Date.now()
   if (t !== 'enc' && t !== 'enc-batch') log('[frame]', t, JSON.stringify(f).slice(0, 220))
 
   switch (t) {
@@ -1978,6 +1997,8 @@ function doRepairPair() {
 const FISH_POS_KEY = 'drc.fishPos'
 const FISH_SIZE = 64
 const FISH_TAP_SLOP = 8
+/** 空闲多久之后躺下睡（Nap）。90 秒：够短到"人走开一会儿"就能歇，够长到不打断小互动。 */
+const FISH_NAP_AFTER_MS = 90_000
 let fishDrag = null
 let fishBubbleTimer = 0
 
@@ -2015,20 +2036,42 @@ function fishState() {
   if (S.hostAway) return 'away'
   const now = Date.now()
   if (S.fishPokeUntil && now < S.fishPokeUntil) return 'poke'
-  if (S.current && S.running[S.current]) {
+  if (hostRunning()) {
+    // 卡在等你动手（审批/提问）时别装成"还在思考"
+    if (fishGated()) return 'wait'
     if (S.fishAnswerUntil && now < S.fishAnswerUntil) return 'talk'
     return 'think'
   }
   if (S.fishDoneUntil && now < S.fishDoneUntil) return 'done'
   if (S.fishTalkUntil && now < S.fishTalkUntil) return 'talk'
+  // 闲了很久没人理 → 躺下睡（Nap），别一直原地晃
+  if (S.fishIdleSince && now - S.fishIdleSince > FISH_NAP_AFTER_MS) return 'nap'
   return 'idle'
+}
+
+/** 主机上是否有会话在跑（不只盯当前这一条）：列表页也看得出"电脑在干活"。 */
+function hostRunning() {
+  for (const id in S.running) if (S.running[id]) return true
+  return false
+}
+
+/** 当前会话是不是卡在一张等人点的卡上（审批 / 提问）。 */
+function fishGated() {
+  const id = S.current
+  if (!id) return false
+  for (const rid in S.cards) {
+    const c = S.cards[rid]
+    if (c && (!c.sessionId || c.sessionId === id)) return true
+  }
+  return false
 }/*
  * 真素材挂载：
- *   1) assets/fish/dafeiyu_Idle.webp —— 序列帧图集（8 列 × 6 行 = 48 帧，12fps），idle 逐帧播放。
- *      网格与锚点来自 unity 精灵图工坊导出的 meta.json（anchorX 0.5 / anchorY 0.0 = 脚底中心），
- *      这里内联成常量：WebView 里 fetch file:// 会被 CORS 拦，不读外部 json。
- *   2) assets/fish/think.png —— 思考态单张静态图（可选）。
- * 都没有就退回内联 SVG 占位画，交互/状态不受影响。
+ *   1) assets/fish/dafeiyu_<Action>.webp —— 序列帧图集（8 列 × 6 行 = 48 帧），
+ *      七套全在（Idle / Think / Talk / Dance / Nap / EatRice / Tsundere），
+ *      逐帧播放靠 background-position 推进，不读外部 json（WebView 里 fetch file:// 会被拦）。
+ *   2) 图集没到（老包/素材缺失）就退回内联 SVG 占位画，交互/状态不受影响。
+ * 注：`fish/idle.png`、`fish/think.png` 是更早的占位单图，`#fishImg` 现在恒隐藏 ——
+ * 真素材齐了之后不该再被它们顶替（否则会看到"占位小鱼"而不是鲸鱼娘）。
  */
 const FISH_CELL = { w: 60, h: 80 }
 const FISH_SPRITES = {
@@ -2042,6 +2085,13 @@ const FISH_SPRITES = {
 }
 let fishSpriteId = 'idle'
 const fishSpriteReady = {}
+/*
+ * 状态 → 动作池（2026-11-12 对齐用户要求）：
+ *   连上/空闲 = Idle 或 Nap（eat 是干饭梗，留着当低频彩蛋）
+ *   主机在跑 = **只** Think（原来是 think 60 + eat 25，"在跑的时候在吃白饭"很出戏）
+ *   收到流式回复 = **只** Talk（原来会随机跳 Dance/Tsundere，正文在流却开始跳舞很怪）
+ *   一轮结束 = Dance、被点 = Tsundere、等太久 = Nap —— 这三条在 fishSync 里直连，不进池子。
+ */
 const FISH_POOLS = {
   idle: [
     { id: 'idle', weight: 60, loops: 2 },
@@ -2049,13 +2099,10 @@ const FISH_POOLS = {
     { id: 'eat', weight: 15, loops: 1 },
   ],
   think: [
-    { id: 'think', weight: 60, loops: 1 },
-    { id: 'eat', weight: 25, loops: 1 },
+    { id: 'think', weight: 1, loops: 1 },
   ],
   talk: [
-    { id: 'talk', weight: 65, loops: 1 },
-    { id: 'dance', weight: 20, loops: 1 },
-    { id: 'tsundere', weight: 15, loops: 1 },
+    { id: 'talk', weight: 1, loops: 1 },
   ],
 }
 let fishStateKey = ''
@@ -2144,9 +2191,11 @@ function fishBubbleText() {
   if (S.hostAway) return '主机暂时离线，等等吧'
   const state = fishState()
   if (state === 'poke') return '唔…别戳啦'
+  if (state === 'wait') return '等你点一下'
   if (state === 'think') return '思考中…'
   if (state === 'talk') return '在回答啦'
   if (state === 'done') return '答完啦'
+  if (state === 'nap') return '我先躺会儿'
   return '空闲'
 }
 function fishSync() {
@@ -2159,11 +2208,22 @@ function fishSync() {
   fab.classList.toggle('think', state === 'think')
   fab.classList.toggle('away', state === 'away')
 
+  // 「闲了多久」：睡觉判定用的时钟；一有活就清零
+  if (state === 'think' || state === 'talk' || state === 'poke' || state === 'done' || state === 'wait') {
+    S.fishIdleSince = 0
+  } else if (!S.fishIdleSince) {
+    S.fishIdleSince = Date.now()
+  }
+
   let spriteId
   if (state === 'poke') {
-    spriteId = 'tsundere'
+    spriteId = 'tsundere'          // 被点：傲娇
+  } else if (state === 'wait') {
+    spriteId = 'tsundere'          // 卡在你手上：抱臂等你点
   } else if (state === 'done') {
-    spriteId = 'dance'
+    spriteId = 'dance'             // 一轮结束：跳一段
+  } else if (state === 'nap') {
+    spriteId = 'nap'               // 等太久：躺下睡
   } else {
     if (state !== fishStateKey) {
       fishStateKey = state
@@ -2293,7 +2353,7 @@ function boot() {
 
   el.connectBtn?.addEventListener('click', () => connect(true))
   el.pairCode?.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(true) })
-  el.refreshBtn?.addEventListener('click', () => { if (S.paired) cmdListSessions() })
+  el.refreshBtn?.addEventListener('click', () => { void refreshSessions() })
   el.updateBtn?.addEventListener('click', () => {
     closeMenu()
     try { window.dshApp.checkUpdate() } catch (_) { log('「更新」只在 App 内可用') }
@@ -2301,9 +2361,6 @@ function boot() {
   el.backBtn?.addEventListener('click', goBack)
   el.sendBtn?.addEventListener('click', cmdSendPrompt)
   el.earlierBtn?.addEventListener('click', loadEarlier)
-  el.subFab?.addEventListener('click', toggleSubPanel)
-  el.subClose?.addEventListener('click', closeSubPanel)
-  el.subArchiveIdle?.addEventListener('click', archiveIdleSubagents)
   el.stopBtn?.addEventListener('click', cmdInterrupt)
   el.msgInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cmdSendPrompt() })
 
@@ -2357,12 +2414,8 @@ function boot() {
   el.repairBtn?.addEventListener('click', () => { closeMenu(); openRepairConfirm() })
 
   // 回到前台立刻重连，不等退避；切后台时靠前台服务+心跳尽量撑住。
-  // 子代理轮询跟着可见性走：后台停（以前锁屏还在按 5 秒一圈地拉），回前台补一次再继续。
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      stopSubPoll()
-      return
-    }
+    if (document.hidden) return
     if (!(S.ws && S.ws.readyState === 1)) {
       if (loadSession()) {
         S.reconnectTries = 0
@@ -2371,16 +2424,21 @@ function boot() {
       }
       return
     }
-    // 已经连着：立刻补一次（后台那段时间的账要结清），再按新状态排下一轮
-    if (S.view === 'chat' && S.current) {
-      requestSubagents()
-      scheduleSubPoll()
-    }
+    // 已经连着但可能已经"半死"（Android 后台最常见的形态）：回前台先确认链路，
+    // 顺便把列表重拉一次 —— 用户从后台切回来最想看到的就是最新状态。
+    // 链路被判死时它已经在重连了，这时不要再去撞一次（会多报一条"连接断了"）。
+    if (checkLinkAlive()) void refreshSessions({ silent: true })
   })
 
   setStatus('未连接')
   syncStopBtn()
   log('客户端已加载，中继: ' + S.relay)
+
+  // 链路看门狗（坑在「半开连接」）：Android WebView 退到后台后，socket 常常既没
+  // 触发 onclose、readyState 也还是 1，但对面已经不回任何东西 —— 那时所有命令都
+  // 发得出去、收不到回执，用户看到的就是"按了没反应、只能退出重进"。心跳 25 秒
+  // 一次、pong 走同一根线，所以 75 秒没有任何入帧就判死、主动重连。
+  setInterval(() => { checkLinkAlive() }, 15000)
 
   if (loadSession()) {
     log('发现已保存的配对，自动重连')
@@ -2398,6 +2456,6 @@ if (document.readyState === 'loading') {
 
 // 调试/自测挂钩：无头浏览器里可以直接灌事件、检查 DOM（不影响正常使用）
 try {
-  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishState, FISH_POOLS, fishFrameAt, fishSpriteOffset, FISH_SPRITES, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT, readCache, saveCache, updateRunBanner, syncStopBtn, renderSubPanel, fmtSpan, requestSubagents, closeSubPanel, toggleSubPanel, SUB_IDLE_WARN_MS }
+  globalThis.__drc = { S, el, applyEvent, handleFrame, renderSessions, renderModelSheet, showView, openSession, goBack, effectiveModel, modelBadgeText, cmdNewSession, findEmptySession, loadImage, findImagePaths, renderMessages, fishSync, fishSay, fishState, FISH_POOLS, fishFrameAt, fishSpriteOffset, FISH_SPRITES, historyCmd, loadEarlier, HISTORY_PAGE_LIMIT, readCache, saveCache, updateRunBanner, syncStopBtn, refreshSessions, fmtAgo, fmtElapsed, runProgressText, checkLinkAlive }
 } catch (_) {}
 

@@ -44,12 +44,14 @@ $p = Start-Process -FilePath $browser -ArgumentList $args -NoNewWindow -Wait -Pa
 $raw = Get-Content "$tmp.out" -Raw
 $i = $raw.IndexOf('id="res"')
 if ($i -lt 0) { Write-Error "页面里没有结果块（脚本没跑起来？）"; exit 1 }
-$seg = $raw.Substring($i, [Math]::Min(4000, $raw.Length - $i))
+# 窗口要够大：用例已经上百条，4000 字只能看到前一半，后面的失败会"看不见"（只体现在 title 的 FAIL:n 里）
+$seg = $raw.Substring($i, [Math]::Min(30000, $raw.Length - $i))
 $lines = ($seg -replace '</div>', "`n" -replace '<[^>]+>', '') -split "`n" |
-  ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^(PASS|FAIL)' }
+  ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^(PASS|FAIL) ' }
 
 $lines | ForEach-Object { Write-Host $_ }
-$fails = @($lines | Where-Object { $_ -like 'FAIL*' }).Count
+# 必须带空格：页面里可能混进 "failures: []" 这种以 fail 开头的文本，-like 'FAIL*' 会把它算成失败
+$fails = @($lines | Where-Object { $_ -like 'FAIL *' }).Count
 $title = ''
 if ($raw -match '<title>(.*?)</title>') { $title = $matches[1]; Write-Host ("title=" + $title) }
 # 页面标题是权威判据：任何 JS 异常也会让它变成 FAIL:n
