@@ -379,14 +379,46 @@ function workspaceLabel(ws) {
   return parts.length > 2 ? parts.slice(-2).join('/') : parts.join('/')
 }
 
+/**
+ * 会话列表换了一份新的时候，把**残留的会话级缓存**清掉（2026-11-19）。
+ *
+ * 为什么要有：running / runDone / runStart / step / lastAct / fresh 都是按会话 id 记的。
+ * 会话被归档或删掉之后，这些键还留着——于是新列表里明明没有它，
+ * 「已归档」那行、或者某个幽灵状态还会从缓存里被翻出来（用户看到的就是"归档的还能看见"）。
+ * 判据：只保留**新列表里存在、且没被归档**的 id。
+ */
+function pruneSessionCaches() {
+  const alive = new Set()
+  for (const raw of S.sessions) {
+    const s = raw && (raw.session ?? raw)
+    if (!s || typeof s !== 'object') continue
+    const id = s.id || s.sessionId || s.convId || ''
+    if (!id) continue
+    if (s.state === 'archived' || s.archived === true) continue
+    alive.add(id)
+  }
+  for (const bag of [S.running, S.runDone, S.runStart, S.step, S.lastAct, S.fresh]) {
+    if (!bag || typeof bag !== 'object') continue
+    for (const key of Object.keys(bag)) {
+      if (!alive.has(key)) delete bag[key]
+    }
+  }
+}
+
 function renderSessions() {
   if (!el.sessions) return
   el.sessions.innerHTML = ''
 
-  // 过滤：委派子会话 + 没有标题的（这两类点进去必然是空的）
+  /*
+   * 过滤：委派子会话 + **已归档** + 没有标题的（这三类点进去必然是空的/不该出现的）。
+   *
+   * 2026-11-19 用户要求：手机端不显示已归档的对话——主机侧虽然默认不下发归档条目，
+   * 但 `ev.session_changed` 推的是整份列表（含 state:'archived' 的行），所以这里得自己挡一道。
+   */
   const list = S.sessions
     .map(raw => raw.session ?? raw)
     .filter(s => s.origin !== 'subagent')
+    .filter(s => s.state !== 'archived' && s.archived !== true)
     // 没标题的会话一般藏起来（桌面端那些空会话太占屏）；但刚在手机上新建的、
     // 以及正开着的，要留着 —— 否则「新建完返回列表就找不到它」
     .filter(s => {
@@ -1342,6 +1374,7 @@ function applyEvent(p) {
     S.sessions = Array.isArray(p.sessions) ? p.sessions : []
     // 主机主动推的列表就是"新鲜的一份"：记下时间，列表页据此显示"已更新 HH:MM"
     S.listStamp = Date.now()
+    pruneSessionCaches()
     renderSessions()
     return
   }
