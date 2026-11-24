@@ -33,8 +33,19 @@ public final class UpdateManager {
 
     private static final String OWNER = "YaoyaoDeBaba";
     private static final String REPO = "dsh-pc-to-androidphone";
-    private static final String API =
+    /** 自建中转（首尔）发布的 release 清单：与 GitHub release 同形状，见 /pkg/apk/latest.json。 */
+    private static final String API_MIRROR =
+            "https://whale.dafeiyu.zone/pkg/apk/latest.json";
+    /** 官方 API：中转挂了（或换机器）时回落这里。 */
+    private static final String API_GITHUB =
             "https://api.github.com/repos/" + OWNER + "/" + REPO + "/releases/latest";
+    /**
+     * 取清单的顺序：**先中转、后官方**。
+     *
+     * 为什么（2026-11-24）：国内直连 api.github.com / objects.githubusercontent.com 经常超时，
+     * 而自建中继机在境外、到国内 443 稳定；中转同时镜像了 APK 本体，下载也一起走它。
+     */
+    private static final String[] API_ENDPOINTS = { API_MIRROR, API_GITHUB };
 
     /** 下载失败自动重试次数上限（每次间隔 3 秒）。 */
     private static final int MAX_DOWNLOAD_ATTEMPTS = 4;
@@ -78,29 +89,56 @@ public final class UpdateManager {
      * 查最新 Release。手动检查（点「更新」按钮）没新版或失败时会弹提示，
      * 自动检查保持静默，避免每次开 App 都打扰。
      */
-    public static void check(final Activity activity, final boolean manual) {
-        new Thread(() -> {
+    /**
+     * 取最新 release 的 JSON 文本。
+     *
+     * 顺序：自建中转 → GitHub 官方。任一侧 200 就用它，全部失败返回 null。
+     * 中转那份是 GitHub release 形状（含 tag_name / assets[].browser_download_url），
+     * 所以下面解析逻辑一个字都不用改；区别只是下载地址指向自建域名的 /pkg/apk/<tag>/。
+     */
+    private static String fetchLatestReleaseJson() {
+        for (String endpoint : API_ENDPOINTS) {
+            HttpURLConnection c = null;
             try {
-                HttpURLConnection c = (HttpURLConnection) new URL(API).openConnection();
+                c = (HttpURLConnection) new URL(endpoint).openConnection();
                 c.setConnectTimeout(8000);
                 c.setReadTimeout(8000);
                 c.setRequestProperty("Accept", "application/vnd.github+json");
                 c.setRequestProperty("User-Agent", "dsh-remote-updater");
-                if (c.getResponseCode() != 200) {
-                    if (manual) {
-                        toast(activity, "检查更新失败，请检查网络");
-                        log("检查更新失败: HTTP " + c.getResponseCode());
-                    }
-                    return;
+                int code = c.getResponseCode();
+                if (code != 200) {
+                    log("检查更新：" + endpoint + " -> HTTP " + code);
+                    continue;
                 }
-
                 StringBuilder sb = new StringBuilder();
                 BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream()));
                 String line;
                 while ((line = r.readLine()) != null) sb.append(line);
                 r.close();
+                log("检查更新：清单来自 " + endpoint);
+                return sb.toString();
+            } catch (Exception e) {
+                log("检查更新：" + endpoint + " 失败: " + e);
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        }
+        return null;
+    }
+    public static void check(final Activity activity, final boolean manual) {
+        new Thread(() -> {
+            try {
+                
+                // 先中转、后官方；两边都失败才算"检查更新失败"（见 API_ENDPOINTS）。
+                String payload = fetchLatestReleaseJson();
+                if (payload == null) {
+                    if (manual) {
+                        toast(activity, "检查更新失败，请检查网络");
+                    }
+                    return;
+                }
 
-                JSONObject json = new JSONObject(sb.toString());
+                JSONObject json = new JSONObject(payload);
                 String tag = json.optString("tag_name", "");
                 if (!tag.startsWith("build-")) return;
 
